@@ -58,7 +58,7 @@ func (r *RepositorioMongo) CrearProducto(ctx context.Context, p Producto) (Produ
 func (r *RepositorioMongo) EncontrarTodos(ctx context.Context) ([]Producto, error) {
 	cursor, err := r.coleccion.Find(
 		ctx,
-		bson.M{},
+		bson.M{"fecha_eliminacion": nil},
 	)
 
 	if err != nil {

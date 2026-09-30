@@ -35,7 +35,7 @@ func (r *RepositorioMongo) EncontrarPorId(ctx context.Context, id string) (Depos
 
 	var deposito Deposito
 
-	if err := r.coleccion.FindOne(ctx, bson.M{"_id": oid}).Decode(&deposito); err != nil {
+	if err := r.coleccion.FindOne(ctx, bson.M{"_id": oid, "fecha_eliminacion": nil}).Decode(&deposito); err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			return Deposito{}, errors.New("libro no encontrado")
 		}
@@ -57,7 +57,7 @@ func (r *RepositorioMongo) CrearDeposito(ctx context.Context, d Deposito) (Depos
 func (r *RepositorioMongo) EncontrarTodos(ctx context.Context) ([]Deposito, error) {
 	cursor, err := r.coleccion.Find(
 		ctx,
-		bson.M{},
+		bson.M{"fecha_eliminacion": nil},
 	)
 
 	if err != nil {

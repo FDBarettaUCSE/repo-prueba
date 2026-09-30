@@ -8,7 +8,7 @@ import (
 )
 
 type Categoria struct {
-	ID               bson.ObjectID       `bson:"_id, omitempty"`
+	ID               bson.ObjectID       `bson:"_id,omitempty"`
 	Nombre           string              `bson:"nombre"`
 	FechaEliminacion *time.Time          `bson:"fecha_eliminacion,omitempty"`
 	Auditoria        auditoria.Auditoria `bson:"auditoria"`

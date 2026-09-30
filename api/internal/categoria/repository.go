@@ -36,7 +36,7 @@ func (r *RepositorioMongo) EncontrarPorId(ctx context.Context, id string) (Categ
 
 	var categoria Categoria
 
-	if err := r.coleccion.FindOne(ctx, bson.M{"_id": oid}).Decode(&categoria); err != nil {
+	if err := r.coleccion.FindOne(ctx, bson.M{"_id": oid, "fecha_eliminacion": nil}).Decode(&categoria); err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			return Categoria{}, errors.New("libro no encontrado")
 		}
@@ -68,6 +68,7 @@ func (r *RepositorioMongo) EncontrarPorIds(ctx context.Context, ids []string) ([
 			"_id": bson.M{
 				"$in": oids,
 			},
+			"fecha_eliminacion": nil,
 		},
 	)
 
@@ -99,7 +100,7 @@ func (r *RepositorioMongo) CrearCategoria(ctx context.Context, c Categoria) (Cat
 func (r *RepositorioMongo) EncontrarTodos(ctx context.Context) ([]Categoria, error) {
 	cursor, err := r.coleccion.Find(
 		ctx,
-		bson.M{},
+		bson.M{"fecha_eliminacion": nil},
 	)
 
 	if err != nil {

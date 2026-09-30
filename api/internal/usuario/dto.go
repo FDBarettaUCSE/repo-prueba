@@ -34,7 +34,7 @@ type UsuarioDTO struct {
 }
 
 type CambiarEstadoUsuarioDTO struct {
-	estado bool
+	Estado bool
 }
 
 // Que rol le damos a los usuarios nuevos? Preguntar
@@ -43,7 +43,7 @@ func (*RegistrarDTO) NuevoUsuarioRegistrar(dto RegistrarDTO, hash string, adminI
 		Correo:             dto.Correo,
 		ContraseñaHasheada: hash,
 		Rol:                dto.Rol,
-		Activado:           false,
+		Activado:           true,
 		DepositoAsociado:   depositoId,
 		Auditoria: auditoria.Auditoria{
 			CreadoPor: adminId,

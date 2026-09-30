@@ -159,7 +159,7 @@ func (s *UsuarioService) CambiarEstadoUsuario(ctx context.Context, usuarioID, ad
 		return ErrUsuarioInexistente
 	}
 
-	return s.usuarioRepositorio.ActivarUsuario(ctx, usuarioID, adminID, dto.estado)
+	return s.usuarioRepositorio.ActivarUsuario(ctx, usuarioID, adminID, dto.Estado)
 }
 
 // Funcion auxiliar, recibe un rol desde el cliente y revisa que exista en el model

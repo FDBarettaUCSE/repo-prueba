@@ -34,7 +34,7 @@ var _ UsuarioRepositorio = (*RepositorioMongo)(nil)
 // que ingresa el usuario, no el _id interno de Mongo.
 func (r *RepositorioMongo) EncontarPorCorreo(ctx context.Context, correo string) (Usuario, error) {
 	var u Usuario
-	if err := r.coleccion.FindOne(ctx, bson.M{"correo": correo}).Decode(&u); err != nil {
+	if err := r.coleccion.FindOne(ctx, bson.M{"correo": correo, "activado": true}).Decode(&u); err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			return Usuario{}, errors.New("usuario no encontrado")
 		}

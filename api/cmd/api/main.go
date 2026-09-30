@@ -7,9 +7,12 @@ import (
 	depositoproducto "api/internal/depositoProducto"
 	"api/internal/middleware"
 	movimientostock "api/internal/movimientoStock"
+	novedaddeposito "api/internal/novedadDeposito"
+	ordendecompra "api/internal/ordenDeCompra"
 	"api/internal/producto"
-	"api/internal/productoProveedor"
+	productoproveedor "api/internal/productoProveedor"
 	"api/internal/proveedor"
+	"api/internal/reporte"
 	"api/internal/transferencia"
 	"api/internal/usuario"
 
@@ -43,6 +46,8 @@ func main() {
 	depositoProductoColeccion := database.Collection("deposito_producto")
 	movimientoStockColeccion := database.Collection("movimientos_stock")
 	transferenciaColeccion := database.Collection("transferencias")
+	novedadDepositoColeccion := database.Collection("novedades_deposito")
+	ordenesCompraColeccion := database.Collection("ordenes_compra")
 
 	// Cargamos los modulos para cada una de las colecciones
 	depositoRepo := deposito.NuevoRepositorioMongo(depositoColeccion)
@@ -81,6 +86,22 @@ func main() {
 	transferenciaService := transferencia.NuevoService(transferenciaRepo, depositoProductoRepo, movimientoStockRepo)
 	transferenciaHandler := transferencia.NuevoHandler(transferenciaService)
 
+	novedadDepositoRepo := novedaddeposito.NuevoRepositorioMongo(novedadDepositoColeccion)
+	novedadDepositoService := novedaddeposito.NuevoService(novedadDepositoRepo, depositoRepo)
+	novedadDepositoHandler := novedaddeposito.NuevoHandler(novedadDepositoService)
+
+	// ordenDeCompra todavía no tiene su propio service/handler armados (ver
+	// dto.go/handler.go/service.go, que siguen siendo un stub) — acá solo se
+	// instancia su repositorio, de solo lectura, para que reporte pueda
+	// agregar el estado de las órdenes de compra por depósito.
+	ordenCompraRepo := ordendecompra.NuevoRepositorioMongo(ordenesCompraColeccion)
+
+	reporteService := reporte.NuevoService(
+		depositoRepo, categoriaRepo, productoRepo, depositoProductoRepo,
+		movimientoStockRepo, transferenciaRepo, ordenCompraRepo,
+	)
+	reporteHandler := reporte.NuevoHandler(reporteService)
+
 	// Definimos los middlewares que van a ser invocados en
 	// los registradores de rutas en los handlers
 	authMiddleware := middleware.AuthMiddleware()
@@ -100,6 +121,8 @@ func main() {
 	depositoproducto.RegistrarRutas(router, depositoProductoHandler, authMiddleware, rolMiddleware)
 	movimientostock.RegistrarRutas(router, movimientoStockHandler, authMiddleware, rolMiddleware)
 	transferencia.RegistrarRutas(router, transferenciaHandler, authMiddleware, rolMiddleware)
+	novedaddeposito.RegistrarRutas(router, novedadDepositoHandler, authMiddleware, rolMiddleware)
+	reporte.RegistrarRutas(router, reporteHandler, authMiddleware, rolMiddleware)
 
 	if err := router.Run(":8080"); err != nil {
 		log.Fatal(err)
