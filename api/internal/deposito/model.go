@@ -12,15 +12,24 @@ type Deposito struct {
 	Nombre           string              `bson:"nombre"`
 	Localidad        string              `bson:"localidad"`
 	Provincia        string              `bson:"provincia"`
+	ResponsableID    *bson.ObjectID      `bson:"responsable_id,omitempty"`
 	FechaEliminacion *time.Time          `bson:"fecha_eliminacion,omitempty"`
 	Auditoria        auditoria.Auditoria `bson:"auditoria"`
 }
 
 func MapeoADepositoDTO(d Deposito) DepositoDTO {
+
+	var responsableID string
+
+	if d.ResponsableID != nil {
+		responsableID = d.ResponsableID.Hex()
+	}
+
 	return DepositoDTO{
-		ID:        d.ID.Hex(),
-		Nombre:    d.Nombre,
-		Localidad: d.Localidad,
-		Provincia: d.Provincia,
+		ID:            d.ID.Hex(),
+		Nombre:        d.Nombre,
+		Localidad:     d.Localidad,
+		Provincia:     d.Provincia,
+		ResponsableID: responsableID,
 	}
 }

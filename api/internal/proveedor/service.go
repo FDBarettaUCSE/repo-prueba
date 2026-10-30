@@ -2,18 +2,50 @@ package proveedor
 
 import (
 	"api/internal/producto"
-	"api/internal/productoProveedor"
+	productoproveedor "api/internal/productoProveedor"
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 var (
-	ErrCUITInvalido        = errors.New("el CUIT ingresado no es válido")
-	ErrCUITYaRegistrado    = errors.New("ya existe un proveedor registrado con ese CUIT")
-	ErrProductoInexistente = errors.New("el producto ingresado no existe")
+	ErrNombreProveedorVacio = errors.New(
+		"el nombre del proveedor es obligatorio",
+	)
+
+	ErrEmailProveedorInvalido = errors.New(
+		"el email del proveedor es obligatorio",
+	)
+
+	ErrCUITInvalido = errors.New(
+		"el CUIT ingresado no es válido",
+	)
+
+	ErrCUITYaRegistrado = errors.New(
+		"ya existe un proveedor registrado con ese CUIT",
+	)
+
+	ErrProveedorInexistente = errors.New(
+		"el proveedor solicitado no existe",
+	)
+
+	ErrProductoInexistente = errors.New(
+		"el producto ingresado no existe",
+	)
+
+	ErrCostoInvalido = errors.New(
+		"el costo debe ser mayor a cero",
+	)
+
+	ErrTiempoEntregaInvalido = errors.New(
+		"el tiempo de entrega no puede ser negativo",
+	)
+
+	ErrProductoSuministradoInexistente = productoproveedor.ErrProductoSuministradoInexistente
+	ErrProductoYaSuministrado          = productoproveedor.ErrProductoYaSuministrado
 )
 
 type ProveedorService struct {
@@ -34,33 +66,70 @@ func NuevoProveedorService(
 	}
 }
 
-func (s *ProveedorService) ListarTodosProveedores(ctx context.Context) ([]ProveedorDTO, error) {
+func (s *ProveedorService) ListarTodosProveedores(
+	ctx context.Context,
+) ([]ProveedorDTO, error) {
+
 	proveedores, err := s.proveedorRepositorio.EncontrarTodos(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	proveedoresDTO := []ProveedorDTO{}
+	proveedoresDTO := make([]ProveedorDTO, 0, len(proveedores))
+
 	for _, p := range proveedores {
-		proveedoresDTO = append(proveedoresDTO, MapeoAProveedorDTO(p))
+		proveedoresDTO = append(
+			proveedoresDTO,
+			MapeoAProveedorDTO(p),
+		)
 	}
+
 	return proveedoresDTO, nil
 }
 
-func (s *ProveedorService) BuscarProveedorPorID(ctx context.Context, id string) (ProveedorDTO, error) {
-	proveedor, err := s.proveedorRepositorio.EncontrarPorId(ctx, id)
+func (s *ProveedorService) BuscarProveedorPorID(
+	ctx context.Context,
+	id string,
+) (ProveedorDTO, error) {
+
+	_, err := bson.ObjectIDFromHex(id)
 	if err != nil {
-		return ProveedorDTO{}, err
+		return ProveedorDTO{}, ErrProveedorInexistente
 	}
+
+	proveedor, err := s.proveedorRepositorio.EncontrarPorId(
+		ctx,
+		id,
+	)
+	if err != nil {
+		return ProveedorDTO{}, ErrProveedorInexistente
+	}
+
 	return MapeoAProveedorDTO(proveedor), nil
 }
 
-func (s *ProveedorService) CrearProveedor(ctx context.Context, idAdmin string, d CrearProveedorDTO) (ProveedorDTO, error) {
+func (s *ProveedorService) CrearProveedor(
+	ctx context.Context,
+	idAdmin string,
+	d CrearProveedorDTO,
+) (ProveedorDTO, error) {
+
+	if strings.TrimSpace(d.Nombre) == "" {
+		return ProveedorDTO{}, ErrNombreProveedorVacio
+	}
+
+	if strings.TrimSpace(d.Email) == "" {
+		return ProveedorDTO{}, ErrEmailProveedorInvalido
+	}
+
 	if !EsCUITValido(d.CUIT) {
 		return ProveedorDTO{}, ErrCUITInvalido
 	}
 
-	if _, err := s.proveedorRepositorio.EncontrarPorCUIT(ctx, d.CUIT); err == nil {
+	if _, err := s.proveedorRepositorio.EncontrarPorCUIT(
+		ctx,
+		d.CUIT,
+	); err == nil {
 		return ProveedorDTO{}, ErrCUITYaRegistrado
 	}
 
@@ -70,23 +139,53 @@ func (s *ProveedorService) CrearProveedor(ctx context.Context, idAdmin string, d
 	}
 
 	proveedor := MapeoCrearDTOAProveedor(d)
+
 	proveedor.Auditoria.CreadoPor = oidAdmin
 	proveedor.Auditoria.CreadoEn = time.Now()
 
-	proveedor, err = s.proveedorRepositorio.CrearProveedor(ctx, proveedor)
+	proveedor, err = s.proveedorRepositorio.CrearProveedor(
+		ctx,
+		proveedor,
+	)
 	if err != nil {
 		return ProveedorDTO{}, err
 	}
+
 	return MapeoAProveedorDTO(proveedor), nil
 }
 
-func (s *ProveedorService) ActualizarProveedor(ctx context.Context, id, idAdmin string, d ActualizarProveedorDTO) (ProveedorDTO, error) {
+func (s *ProveedorService) ActualizarProveedor(
+	ctx context.Context,
+	id string,
+	idAdmin string,
+	d ActualizarProveedorDTO,
+) (ProveedorDTO, error) {
+
+	if strings.TrimSpace(d.Nombre) == "" {
+		return ProveedorDTO{}, ErrNombreProveedorVacio
+	}
+
+	if strings.TrimSpace(d.Email) == "" {
+		return ProveedorDTO{}, ErrEmailProveedorInvalido
+	}
+
 	if !EsCUITValido(d.CUIT) {
 		return ProveedorDTO{}, ErrCUITInvalido
 	}
 
-	// Si el CUIT cambió, hay que confirmar que no choque con el de otro proveedor.
-	if existente, err := s.proveedorRepositorio.EncontrarPorCUIT(ctx, d.CUIT); err == nil && existente.ID.Hex() != id {
+	// Primero verificamos que el proveedor exista.
+	if _, err := s.proveedorRepositorio.EncontrarPorId(
+		ctx,
+		id,
+	); err != nil {
+		return ProveedorDTO{}, ErrProveedorInexistente
+	}
+
+	// Si el CUIT cambió, no puede coincidir con otro proveedor.
+	if existente, err := s.proveedorRepositorio.EncontrarPorCUIT(
+		ctx,
+		d.CUIT,
+	); err == nil && existente.ID.Hex() != id {
 		return ProveedorDTO{}, ErrCUITYaRegistrado
 	}
 
@@ -96,141 +195,378 @@ func (s *ProveedorService) ActualizarProveedor(ctx context.Context, id, idAdmin 
 	}
 
 	proveedor := MapeoActualizarDTOAProveedor(d)
+
 	proveedor.Auditoria.ModificadoPor = &oidAdmin
 
 	ahora := time.Now()
 	proveedor.Auditoria.ActualizadoEn = &ahora
 
-	proveedor, err = s.proveedorRepositorio.ActualizarProveedor(ctx, id, proveedor)
+	proveedor, err = s.proveedorRepositorio.ActualizarProveedor(
+		ctx,
+		id,
+		proveedor,
+	)
 	if err != nil {
 		return ProveedorDTO{}, err
 	}
+
 	return MapeoAProveedorDTO(proveedor), nil
 }
 
-func (s *ProveedorService) EliminarProveedor(ctx context.Context, id, idAdmin string) error {
-	if err := s.proveedorRepositorio.EliminarProveedor(ctx, id, idAdmin); err != nil {
-		return err
-	}
+func (s *ProveedorService) EliminarProveedor(
+	ctx context.Context,
+	id string,
+	idAdmin string,
+) error {
 
 	oid, err := bson.ObjectIDFromHex(id)
 	if err != nil {
+		return ErrProveedorInexistente
+	}
+
+	oidAdmin, err := bson.ObjectIDFromHex(idAdmin)
+	if err != nil {
 		return err
 	}
-	// No debe quedar un producto "suministrado" por un proveedor dado de baja.
-	return s.productoProveedorRepositorio.EliminarTodosDeProveedor(ctx, oid)
+
+	// Verificamos que el proveedor exista.
+	if _, err := s.proveedorRepositorio.EncontrarPorId(
+		ctx,
+		id,
+	); err != nil {
+		return ErrProveedorInexistente
+	}
+
+	// Eliminamos lógicamente el proveedor y auditamos la operación.
+	if err := s.proveedorRepositorio.EliminarProveedor(
+		ctx,
+		id,
+		idAdmin,
+	); err != nil {
+		return err
+	}
+
+	// Eliminamos lógicamente sus relaciones y auditamos la operación.
+	return s.productoProveedorRepositorio.EliminarTodosDeProveedor(
+		ctx,
+		oid,
+		oidAdmin,
+	)
 }
 
 // --- Productos que suministra ---
 
-func (s *ProveedorService) ListarProductosSuministrados(ctx context.Context, proveedorID string) ([]ProductoSuministradoDTO, error) {
+func (s *ProveedorService) ListarProductosSuministrados(
+	ctx context.Context,
+	proveedorID string,
+) ([]ProductoSuministradoDTO, error) {
+
 	oidProveedor, err := bson.ObjectIDFromHex(proveedorID)
 	if err != nil {
-		return nil, err
+		return nil, ErrProveedorInexistente
 	}
 
-	vinculos, err := s.productoProveedorRepositorio.EncontrarPorProveedor(ctx, oidProveedor)
+	if _, err := s.proveedorRepositorio.EncontrarPorId(
+		ctx,
+		proveedorID,
+	); err != nil {
+		return nil, ErrProveedorInexistente
+	}
+
+	vinculos, err := s.productoProveedorRepositorio.EncontrarPorProveedor(
+		ctx,
+		oidProveedor,
+	)
+
 	if err != nil {
 		return nil, err
 	}
 
-	resultado := []ProductoSuministradoDTO{}
-	for _, v := range vinculos {
-		prod, err := s.productoRepositorio.EncontrarPorId(ctx, v.ProductoID.Hex())
-		if err != nil {
-			// Si el producto fue eliminado mientras tanto, no rompemos el
-			// listado entero: lo salteamos.
+	if len(vinculos) == 0 {
+		return []ProductoSuministradoDTO{}, nil
+	}
+
+	productoIDs := make(
+		[]bson.ObjectID,
+		0,
+		len(vinculos),
+	)
+
+	for _, vinculo := range vinculos {
+		productoIDs = append(
+			productoIDs,
+			vinculo.ProductoID,
+		)
+	}
+
+	productos, err := s.productoRepositorio.EncontrarPorIds(
+		ctx,
+		productoIDs,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	productosPorID := make(
+		map[bson.ObjectID]producto.Producto,
+		len(productos),
+	)
+
+	for _, p := range productos {
+		productosPorID[p.ID] = p
+	}
+
+	resultado := make(
+		[]ProductoSuministradoDTO,
+		0,
+		len(vinculos),
+	)
+
+	for _, vinculo := range vinculos {
+
+		p, existe := productosPorID[vinculo.ProductoID]
+		if !existe {
 			continue
 		}
-		resultado = append(resultado, ProductoSuministradoDTO{
-			ProductoID:        v.ProductoID.Hex(),
-			ProductoNombre:    prod.Nombre,
-			Costo:             v.CostoUnidad,
-			TiempoEntregaDias: v.TiempoEstimadoDias,
-		})
+
+		resultado = append(
+			resultado,
+			ProductoSuministradoDTO{
+				ProductoID:        p.ID.Hex(),
+				ProductoNombre:    p.Nombre,
+				Costo:             vinculo.CostoUnidad,
+				TiempoEntregaDias: vinculo.TiempoEstimadoDias,
+			},
+		)
 	}
+
 	return resultado, nil
 }
 
-// ListarProveedoresDeProducto es la vista inversa: dado un producto, quiénes
-// lo suministran y en qué condiciones. La va a usar el módulo de Órdenes de
-// Compra para elegir un proveedor (por ejemplo, el de menor costo) al generar
-// la sugerencia automática por stock bajo mínimo.
-func (s *ProveedorService) ListarProveedoresDeProducto(ctx context.Context, productoID string) ([]ProveedorDeProductoDTO, error) {
+func (s *ProveedorService) ListarProveedoresDeProducto(
+	ctx context.Context,
+	productoID string,
+) ([]ProveedorDeProductoDTO, error) {
+
 	oidProducto, err := bson.ObjectIDFromHex(productoID)
 	if err != nil {
-		return nil, err
+		return nil, ErrProductoInexistente
 	}
 
-	vinculos, err := s.productoProveedorRepositorio.EncontrarPorProducto(ctx, oidProducto)
+	// El producto debe existir para poder consultar sus proveedores.
+	if _, err := s.productoRepositorio.EncontrarPorId(
+		ctx,
+		productoID,
+	); err != nil {
+		return nil, ErrProductoInexistente
+	}
+
+	vinculos, err := s.productoProveedorRepositorio.EncontrarPorProducto(
+		ctx,
+		oidProducto,
+	)
 	if err != nil {
 		return nil, err
 	}
 
-	resultado := []ProveedorDeProductoDTO{}
+	if len(vinculos) == 0 {
+		return []ProveedorDeProductoDTO{}, nil
+	}
+
+	proveedorIDs := make(
+		[]bson.ObjectID,
+		0,
+		len(vinculos),
+	)
+
 	for _, v := range vinculos {
-		prov, err := s.proveedorRepositorio.EncontrarPorId(ctx, v.ProveedorID.Hex())
-		if err != nil {
+		proveedorIDs = append(
+			proveedorIDs,
+			v.ProveedorID,
+		)
+	}
+
+	proveedores, err := s.proveedorRepositorio.EncontrarPorIds(
+		ctx,
+		proveedorIDs,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	proveedoresPorID := make(
+		map[bson.ObjectID]Proveedor,
+		len(proveedores),
+	)
+
+	for _, proveedor := range proveedores {
+		proveedoresPorID[proveedor.ID] = proveedor
+	}
+
+	resultado := make(
+		[]ProveedorDeProductoDTO,
+		0,
+		len(vinculos),
+	)
+
+	for _, v := range vinculos {
+
+		prov, existe := proveedoresPorID[v.ProveedorID]
+		if !existe {
 			continue
 		}
-		resultado = append(resultado, ProveedorDeProductoDTO{
-			ProveedorID:       prov.ID.Hex(),
-			ProveedorNombre:   prov.Nombre,
-			Costo:             v.CostoUnidad,
-			TiempoEntregaDias: v.TiempoEstimadoDias,
-		})
+
+		resultado = append(
+			resultado,
+			ProveedorDeProductoDTO{
+				ProveedorID:       prov.ID.Hex(),
+				ProveedorNombre:   prov.Nombre,
+				Costo:             v.CostoUnidad,
+				TiempoEntregaDias: v.TiempoEstimadoDias,
+			},
+		)
 	}
+
 	return resultado, nil
 }
 
-// AgregarProductoSuministrado también sirve para actualizar costo/tiempo si
-// el vínculo ya existía (ver ProductoProveedorRepositorio.Guardar: es un upsert).
-func (s *ProveedorService) AgregarProductoSuministrado(ctx context.Context, proveedorID string, d AgregarProductoSuministradoDTO) error {
+func (s *ProveedorService) AgregarProductoSuministrado(
+	ctx context.Context,
+	idAdmin string,
+	proveedorID string,
+	d AgregarProductoSuministradoDTO,
+) error {
 	oidProveedor, err := bson.ObjectIDFromHex(proveedorID)
 	if err != nil {
-		return err
+		return ErrProveedorInexistente
 	}
 
-	// Confirmamos que el proveedor y el producto existan antes de vincularlos.
-	if _, err := s.proveedorRepositorio.EncontrarPorId(ctx, proveedorID); err != nil {
-		return err
+	_, err = s.proveedorRepositorio.EncontrarPorId(ctx, proveedorID)
+	if err != nil {
+		return ErrProveedorInexistente
 	}
+
 	prod, err := s.productoRepositorio.EncontrarPorId(ctx, d.ProductoID)
 	if err != nil {
 		return ErrProductoInexistente
 	}
 
 	if d.Costo <= 0 {
-		return errors.New("el costo debe ser mayor a cero")
+		return ErrCostoInvalido
 	}
+
 	if d.TiempoEntregaDias < 0 {
-		return errors.New("el tiempo de entrega no puede ser negativo")
+		return ErrTiempoEntregaInvalido
 	}
 
-	return s.productoProveedorRepositorio.Guardar(ctx, productoproveedor.ProductoProveedor{
-		ProductoID:         prod.ID,
-		ProveedorID:        oidProveedor,
-		CostoUnidad:        d.Costo,
-		TiempoEstimadoDias: d.TiempoEntregaDias,
-	})
+	oidAdmin, err := bson.ObjectIDFromHex(idAdmin)
+	if err != nil {
+		return err
+	}
+
+	productoProveedor := MapeoAgregarProductoSuministradoDTOAProductoProveedor(
+		d,
+		prod.ID,
+		oidProveedor,
+	)
+
+	productoProveedor.Auditoria.CreadoPor = oidAdmin
+	productoProveedor.Auditoria.CreadoEn = time.Now()
+
+	return s.productoProveedorRepositorio.Crear(ctx, productoProveedor)
 }
 
-func (s *ProveedorService) ActualizarProductoSuministrado(ctx context.Context, proveedorID, productoID string, d ActualizarProductoSuministradoDTO) error {
-	return s.AgregarProductoSuministrado(ctx, proveedorID, AgregarProductoSuministradoDTO{
-		ProductoID:        productoID,
-		Costo:             d.Costo,
-		TiempoEntregaDias: d.TiempoEntregaDias,
-	})
-}
-
-func (s *ProveedorService) EliminarProductoSuministrado(ctx context.Context, proveedorID, productoID string) error {
+func (s *ProveedorService) ActualizarProductoSuministrado(
+	ctx context.Context,
+	idAdmin string,
+	proveedorID string,
+	productoID string,
+	d ActualizarProductoSuministradoDTO,
+) error {
 	oidProveedor, err := bson.ObjectIDFromHex(proveedorID)
 	if err != nil {
-		return err
+		return ErrProveedorInexistente
 	}
-	oidProducto, err := bson.ObjectIDFromHex(productoID)
+
+	_, err = s.proveedorRepositorio.EncontrarPorId(ctx, proveedorID)
+	if err != nil {
+		return ErrProveedorInexistente
+	}
+
+	prod, err := s.productoRepositorio.EncontrarPorId(ctx, productoID)
+	if err != nil {
+		return ErrProductoInexistente
+	}
+
+	if d.Costo <= 0 {
+		return ErrCostoInvalido
+	}
+
+	if d.TiempoEntregaDias < 0 {
+		return ErrTiempoEntregaInvalido
+	}
+
+	oidAdmin, err := bson.ObjectIDFromHex(idAdmin)
 	if err != nil {
 		return err
 	}
-	return s.productoProveedorRepositorio.Eliminar(ctx, oidProducto, oidProveedor)
+
+	productoProveedor := MapeoActualizarProductoSuministradoDTOAProductoProveedor(
+		d,
+		prod.ID,
+		oidProveedor,
+	)
+
+	ahora := time.Now()
+	productoProveedor.Auditoria.ModificadoPor = &oidAdmin
+	productoProveedor.Auditoria.ActualizadoEn = &ahora
+
+	return s.productoProveedorRepositorio.Actualizar(
+		ctx,
+		productoProveedor,
+	)
+}
+
+func (s *ProveedorService) EliminarProductoSuministrado(
+	ctx context.Context,
+	adminID string,
+	proveedorID string,
+	productoID string,
+) error {
+
+	oidAdmin, err := bson.ObjectIDFromHex(adminID)
+	if err != nil {
+		return err
+	}
+
+	oidProveedor, err := bson.ObjectIDFromHex(proveedorID)
+	if err != nil {
+		return ErrProveedorInexistente
+	}
+
+	if _, err := s.proveedorRepositorio.EncontrarPorId(
+		ctx,
+		proveedorID,
+	); err != nil {
+		return ErrProveedorInexistente
+	}
+
+	oidProducto, err := bson.ObjectIDFromHex(productoID)
+	if err != nil {
+		return ErrProductoInexistente
+	}
+
+	if _, err := s.productoRepositorio.EncontrarPorId(
+		ctx,
+		productoID,
+	); err != nil {
+		return ErrProductoInexistente
+	}
+
+	return s.productoProveedorRepositorio.Eliminar(
+		ctx,
+		oidProducto,
+		oidProveedor,
+		oidAdmin,
+	)
 }

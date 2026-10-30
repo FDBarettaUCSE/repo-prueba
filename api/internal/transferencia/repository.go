@@ -7,13 +7,14 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 type Repositorio interface {
 	Crear(ctx context.Context, t Transferencia) (Transferencia, error)
 	EncontrarPorID(ctx context.Context, id string) (Transferencia, error)
-	Listar(ctx context.Context, filtro FiltroTransferenciasDTO, depositoPermitido string) ([]Transferencia, error)
-	ActualizarEstado(ctx context.Context, id string, nuevoEstado EstadoTransferencia, resolucionID *bson.ObjectID, fechaResolucion *time.Time, adminID string, motivo string) error
+	Listar(ctx context.Context, filtro FiltroTransferenciasDTO, depositoPermitido string, usuarioID string) ([]Transferencia, int64, error)
+	ActualizarEstado(ctx context.Context, id string, estadoEsperado EstadoTransferencia, nuevoEstado EstadoTransferencia, resolucionID *bson.ObjectID, fechaResolucion *time.Time, adminID string, motivo string) error
 }
 
 type RepositorioMongo struct {
@@ -43,53 +44,115 @@ func (r *RepositorioMongo) EncontrarPorID(ctx context.Context, id string) (Trans
 	var t Transferencia
 	if err := r.coleccion.FindOne(ctx, bson.M{"_id": oid}).Decode(&t); err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
-			return Transferencia{}, errors.New("transferencia no encontrada")
+			return Transferencia{}, ErrTransferenciaInexistente
 		}
 		return Transferencia{}, err
 	}
 	return t, nil
 }
 
-func (r *RepositorioMongo) Listar(ctx context.Context, filtro FiltroTransferenciasDTO, depositoPermitido string) ([]Transferencia, error) {
+func (r *RepositorioMongo) Listar(
+	ctx context.Context,
+	filtro FiltroTransferenciasDTO,
+	depositoPermitido string,
+	usuarioID string,
+) ([]Transferencia, int64, error) {
+
 	query := bson.M{}
 
-	// Si el usuario está restringido a un depósito (gerente/operario)
+	// Filtrar por depósito cuando el usuario tiene uno asignado.
 	if depositoPermitido != "" {
 		depOID, err := bson.ObjectIDFromHex(depositoPermitido)
-		if err == nil {
-			query["$or"] = []bson.M{
-				{"deposito_origen_id": depOID},
-				{"deposito_destino_id": depOID},
-			}
+		if err != nil {
+			return nil, 0, err
+		}
+
+		query["$or"] = []bson.M{
+			{"deposito_origen_id": depOID},
+			{"deposito_destino_id": depOID},
 		}
 	} else if filtro.DepositoID != "" {
 		depOID, err := bson.ObjectIDFromHex(filtro.DepositoID)
-		if err == nil {
-			query["$or"] = []bson.M{
-				{"deposito_origen_id": depOID},
-				{"deposito_destino_id": depOID},
-			}
+		if err != nil {
+			return nil, 0, err
+		}
+
+		query["$or"] = []bson.M{
+			{"deposito_origen_id": depOID},
+			{"deposito_destino_id": depOID},
 		}
 	}
 
+	// Si se recibe un usuarioID, filtrar por solicitante.
+	if usuarioID != "" {
+		usuarioOID, err := bson.ObjectIDFromHex(usuarioID)
+		if err != nil {
+			return nil, 0, err
+		}
+
+		query["usuario_solicitante_id"] = usuarioOID
+	}
+
+	// Filtrar por estado si corresponde.
 	if filtro.Estado != "" {
 		query["estado"] = filtro.Estado
 	}
 
-	cur, err := r.coleccion.Find(ctx, query)
+	// Contar los resultados que cumplen todos los filtros.
+	total, err := r.coleccion.CountDocuments(ctx, query)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
+	}
+
+	// Ordenar por fecha de solicitud descendente.
+	opts := options.Find().SetSort(
+		bson.D{{Key: "fecha_solicitud", Value: -1}},
+	)
+
+	// Aplicar paginación.
+	if filtro.TamanioPagina >= 0 {
+		pagina := filtro.Pagina
+		if pagina < 1 {
+			pagina = 1
+		}
+
+		tamanioPagina := filtro.TamanioPagina
+		if tamanioPagina < 1 {
+			tamanioPagina = 20
+		}
+
+		opts.SetSkip(int64((pagina - 1) * tamanioPagina)).
+			SetLimit(int64(tamanioPagina))
+	}
+
+	cur, err := r.coleccion.Find(ctx, query, opts)
+	if err != nil {
+		return nil, 0, err
 	}
 	defer cur.Close(ctx)
 
 	var transferencias []Transferencia
+
 	if err := cur.All(ctx, &transferencias); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return transferencias, nil
+
+	return transferencias, total, nil
 }
 
-func (r *RepositorioMongo) ActualizarEstado(ctx context.Context, id string, nuevoEstado EstadoTransferencia, resolucionID *bson.ObjectID, fechaResolucion *time.Time, usuarioModificadorID string, motivo string) error {
+// ActualizarEstado realiza una transición de estado atómica filtrando por
+// {_id, estado: estadoEsperado}. Si ninguna fila coincide (por ejemplo, otra
+// petición concurrente ya cambió el estado), devuelve ErrEstadoInvalido.
+func (r *RepositorioMongo) ActualizarEstado(
+	ctx context.Context,
+	id string,
+	estadoEsperado EstadoTransferencia,
+	nuevoEstado EstadoTransferencia,
+	resolucionID *bson.ObjectID,
+	fechaResolucion *time.Time,
+	usuarioModificadorID string,
+	motivo string,
+) error {
 	oid, err := bson.ObjectIDFromHex(id)
 	if err != nil {
 		return err
@@ -114,12 +177,17 @@ func (r *RepositorioMongo) ActualizarEstado(ctx context.Context, id string, nuev
 		setFields["motivo"] = motivo
 	}
 
-	res, err := r.coleccion.UpdateOne(ctx, bson.M{"_id": oid}, bson.M{"$set": setFields})
+	filtro := bson.M{
+		"_id":    oid,
+		"estado": estadoEsperado,
+	}
+
+	res, err := r.coleccion.UpdateOne(ctx, filtro, bson.M{"$set": setFields})
 	if err != nil {
 		return err
 	}
 	if res.MatchedCount == 0 {
-		return errors.New("transferencia no encontrada")
+		return ErrEstadoInvalido
 	}
 	return nil
 }

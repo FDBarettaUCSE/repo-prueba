@@ -27,3 +27,18 @@ type MovimientoStock struct {
 	Motivo               string              `bson:"motivo"`
 	Auditoria            auditoria.Auditoria `bson:"auditoria"`
 }
+
+// ConvertirADTO transforma la entidad MovimientoStock a su DTO de salida
+func (m MovimientoStock) ConvertirADTO(productoNombre string) MovimientoStockDTO {
+	return MovimientoStockDTO{
+		ID:                   m.ID.Hex(),
+		ProductoID:           m.ProductoID.Hex(),
+		ProductoNombre:       productoNombre,
+		DepositoID:           m.DepositoID.Hex(),
+		Cantidad:             m.Cantidad,
+		Tipo:                 m.Tipo,
+		UsuarioResponsableID: m.UsuarioResponsableID.Hex(),
+		FechaHora:            m.FechaHora.Format(time.RFC3339),
+		Motivo:               m.Motivo,
+	}
+}

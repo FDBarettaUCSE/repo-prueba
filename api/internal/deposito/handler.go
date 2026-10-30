@@ -2,7 +2,7 @@ package deposito
 
 import (
 	"api/internal/middleware"
-	"fmt"
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -18,13 +18,21 @@ func NuevoDepositoHandler(service *DepositoService) *DepositoHandler {
 	}
 }
 
+func responderSegunError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, ErrResponsableInvalido):
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	case errors.Is(err, ErrDepositoNoEncontrado):
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+	default:
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	}
+}
+
 func (h *DepositoHandler) ListarTodos(c *gin.Context) {
-	// Esto parece de más
-	usuarioContexto, _ := c.Get("usuarioContexto")
-	fmt.Println(usuarioContexto)
 	depositosDTO, err := h.depositoService.ListarTodosDepositos(c.Request.Context())
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		responderSegunError(c, err)
 		return
 	}
 
@@ -32,11 +40,11 @@ func (h *DepositoHandler) ListarTodos(c *gin.Context) {
 }
 
 func (h *DepositoHandler) BuscarPorID(c *gin.Context) {
-	id := c.Param("id")
+	id := c.Param("depositoId")
 
 	deposito, err := h.depositoService.BuscarDepositoPorID(c.Request.Context(), id)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		responderSegunError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, deposito)
@@ -59,16 +67,16 @@ func (h *DepositoHandler) CrearDeposito(c *gin.Context) {
 
 	depositoCreado, err := h.depositoService.CrearDeposito(c.Request.Context(), adminID, dto)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		responderSegunError(c, err)
 		return
 	}
 	c.JSON(http.StatusCreated, depositoCreado)
 }
 
 func (h *DepositoHandler) ActualizarDeposito(c *gin.Context) {
-	id := c.Param("id")
+	id := c.Param("depositoId")
 
-	var dto DepositoDTO
+	var dto ActualizarDepositoDTO
 	if err := c.ShouldBindJSON(&dto); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -84,14 +92,14 @@ func (h *DepositoHandler) ActualizarDeposito(c *gin.Context) {
 
 	actualizado, err := h.depositoService.ActualizarDeposito(c.Request.Context(), id, adminID, dto)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		responderSegunError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, actualizado)
 }
 
 func (h *DepositoHandler) EliminarDeposito(c *gin.Context) {
-	id := c.Param("id")
+	id := c.Param("depositoId")
 
 	usrCtx, ok := middleware.ObtenerUsuarioContexto(c)
 	if !ok {
@@ -102,7 +110,7 @@ func (h *DepositoHandler) EliminarDeposito(c *gin.Context) {
 	adminID := usrCtx.UsuarioID
 
 	if err := h.depositoService.EliminarDeposito(c.Request.Context(), id, adminID); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		responderSegunError(c, err)
 		return
 	}
 	c.Status(http.StatusNoContent)
@@ -120,7 +128,7 @@ func RegistrarRutas(
 			authMiddleware,
 			depositoHandler.ListarTodos)
 		depositos.GET(
-			"/:id",
+			"/:depositoId",
 			authMiddleware,
 			depositoHandler.BuscarPorID)
 		depositos.POST(
@@ -129,12 +137,12 @@ func RegistrarRutas(
 			rolMiddleware("administrador"),
 			depositoHandler.CrearDeposito)
 		depositos.PUT(
-			"/:id",
+			"/:depositoId",
 			authMiddleware,
 			rolMiddleware("administrador"),
 			depositoHandler.ActualizarDeposito)
 		depositos.DELETE(
-			"/:id",
+			"/:depositoId",
 			authMiddleware,
 			rolMiddleware("administrador"),
 			depositoHandler.EliminarDeposito)

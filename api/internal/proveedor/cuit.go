@@ -2,7 +2,7 @@ package proveedor
 
 import (
 	"regexp"
-	"strconv"
+	"strings"
 )
 
 var soloDigitos = regexp.MustCompile(`\D`)
@@ -12,35 +12,36 @@ var soloDigitos = regexp.MustCompile(`\D`)
 // 8 de número de documento/orden y 1 verificador. Acepta el CUIT con o sin
 // guiones (XX-XXXXXXXX-X).
 func EsCUITValido(cuit string) bool {
-	digitos := soloDigitos.ReplaceAllString(cuit, "")
-	if len(digitos) != 11 {
+	cuit = strings.ReplaceAll(cuit, "-", "")
+
+	if len(cuit) != 11 {
 		return false
+	}
+
+	for _, caracter := range cuit {
+		if caracter < '0' || caracter > '9' {
+			return false
+		}
 	}
 
 	multiplicadores := []int{5, 4, 3, 2, 7, 6, 5, 4, 3, 2}
 
 	suma := 0
+
 	for i := 0; i < 10; i++ {
-		n, err := strconv.Atoi(string(digitos[i]))
-		if err != nil {
-			return false
-		}
-		suma += n * multiplicadores[i]
+		suma += int(cuit[i]-'0') * multiplicadores[i]
 	}
 
 	resto := suma % 11
-	verificadorEsperado := 11 - resto
-	if verificadorEsperado == 11 {
-		verificadorEsperado = 0
+	verificador := 11 - resto
+
+	if verificador == 11 {
+		verificador = 0
 	}
-	if verificadorEsperado == 10 {
-		// Ningún CUIT real da 10 como resultado de este cálculo.
+
+	if verificador == 10 {
 		return false
 	}
 
-	ultimoDigito, err := strconv.Atoi(string(digitos[10]))
-	if err != nil {
-		return false
-	}
-	return ultimoDigito == verificadorEsperado
+	return int(cuit[10]-'0') == verificador
 }

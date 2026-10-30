@@ -28,8 +28,18 @@ type CompletarTransferenciaDTO struct {
 
 // FiltroTransferenciasDTO agrupa parámetros de búsqueda de transferencias
 type FiltroTransferenciasDTO struct {
-	DepositoID string `form:"deposito_id"`
-	Estado     string `form:"estado"`
+	DepositoID    string `form:"deposito_id"`
+	Estado        string `form:"estado"`
+	Pagina        int    `form:"pagina"`
+	TamanioPagina int    `form:"tamanioPagina"`
+}
+
+// TransferenciasPaginadasDTO envuelve el listado con metadata de paginación
+type TransferenciasPaginadasDTO struct {
+	Items         []TransferenciaDTO `json:"items"`
+	Total         int64              `json:"total"`
+	Pagina        int                `json:"pagina"`
+	TamanioPagina int                `json:"tamanioPagina"`
 }
 
 // TransferenciaDTO representa la transferencia formateada para la respuesta al cliente

@@ -9,9 +9,12 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
+const MaxTamanioPagina = 100
+
 var (
-	ErrAccesoDenegado   = errors.New("no tenés permiso para operar sobre este depósito")
-	ErrSinDestinatarios = errors.New(`hay que indicar al menos un depósito destino, o "todos"`)
+	ErrAccesoDenegado      = errors.New("no tenés permiso para operar sobre este depósito")
+	ErrSinDestinatarios    = errors.New(`hay que indicar al menos un depósito destino, o "todos"`)
+	ErrNovedadNoEncontrada = errors.New("novedad no encontrada")
 )
 
 // Service resuelve el envío, la lectura y la respuesta de novedades.
@@ -24,25 +27,52 @@ type Service struct {
 }
 
 func NuevoService(repo NovedadDepositoRepositorio, repoDeposito deposito.DepositoRepositorio) *Service {
-	return &Service{repositorio: repo, depositoRepositorio: repoDeposito}
+	return &Service{
+		repositorio:         repo,
+		depositoRepositorio: repoDeposito,
+	}
 }
 
-// verificarAccesoDeposito: Administrador y Auditor pueden operar sobre
+// verificarAccesoDeposito: Administradores y Auditores pueden operar sobre
 // cualquier depósito; Gerente y Operario solo sobre el suyo — que ya viene
 // resuelto en el JWT (ver middleware.UsuarioContexto.DepositoID), sin
 // necesidad de ir a buscarlo a la base.
 func verificarAccesoDeposito(rol, depositoUsuario, depositoID string) error {
-	if rol == "administrador" || rol == "auditor" {
+	if rol == "auditor" || rol == "administrador" {
 		return nil
 	}
+
 	if depositoUsuario != depositoID {
 		return ErrAccesoDenegado
 	}
+
 	return nil
 }
 
-func crearNovedad(ctx context.Context, repo NovedadDepositoRepositorio, texto, depositoID, usuarioID string) (NovedadDTO, error) {
-	novedad, err := (EnviarNovedadDTO{Texto: texto}).ConvertirAModelo(depositoID)
+// lectorParaRol devuelve el ObjectID del usuario cuando el rol es operario
+// (el estado de lectura y el contador de no leídas son individuales por
+// operario), o nil para el resto de los roles.
+func lectorParaRol(rol, usuarioID string) (*bson.ObjectID, error) {
+	if rol != "operario" {
+		return nil, nil
+	}
+	oid, err := bson.ObjectIDFromHex(usuarioID)
+	if err != nil {
+		return nil, err
+	}
+	return &oid, nil
+}
+
+func crearNovedad(
+	ctx context.Context,
+	repo NovedadDepositoRepositorio,
+	texto, depositoID, usuarioID string,
+) (NovedadDTO, error) {
+
+	novedad, err := (EnviarNovedadDTO{
+		Texto: texto,
+	}).ConvertirAModelo(depositoID)
+
 	if err != nil {
 		return NovedadDTO{}, err
 	}
@@ -51,6 +81,7 @@ func crearNovedad(ctx context.Context, repo NovedadDepositoRepositorio, texto, d
 	if err != nil {
 		return NovedadDTO{}, err
 	}
+
 	novedad.Auditoria.CreadoPor = oidUsuario
 	novedad.Auditoria.CreadoEn = novedad.FechaEnvio
 
@@ -58,14 +89,22 @@ func crearNovedad(ctx context.Context, repo NovedadDepositoRepositorio, texto, d
 	if err != nil {
 		return NovedadDTO{}, err
 	}
-	return guardada.ConvertirADTO(), nil
+
+	return guardada.ConvertirADTO(nil), nil
 }
 
-// EnviarADeposito registra una novedad para UN depósito puntual. El Gerente
-// solo puede usarla sobre SU propio depósito (ver enunciado: "el Gerente...
-// envía novedades a los operarios de su depósito"); Auditor y Administrador
-// pueden apuntar a cualquiera.
-func (s *Service) EnviarADeposito(ctx context.Context, rol, depositoUsuario, depositoID, usuarioID string, dto EnviarNovedadDTO) (NovedadDTO, error) {
+// EnviarADeposito registra una novedad para UN depósito puntual.
+// El Gerente solo puede usarla sobre SU propio depósito.
+// El Administrador y el Auditor pueden apuntar a cualquiera.
+func (s *Service) EnviarADeposito(
+	ctx context.Context,
+	rol,
+	depositoUsuario,
+	depositoID,
+	usuarioID string,
+	dto EnviarNovedadDTO,
+) (NovedadDTO, error) {
+
 	if rol == "gerente" && depositoUsuario != depositoID {
 		return NovedadDTO{}, ErrAccesoDenegado
 	}
@@ -74,25 +113,49 @@ func (s *Service) EnviarADeposito(ctx context.Context, rol, depositoUsuario, dep
 		return NovedadDTO{}, err
 	}
 
-	return crearNovedad(ctx, s.repositorio, dto.Texto, depositoID, usuarioID)
+	return crearNovedad(
+		ctx,
+		s.repositorio,
+		dto.Texto,
+		depositoID,
+		usuarioID,
+	)
 }
 
-// EnviarDifusion manda la misma novedad a varios depósitos elegidos, o a
-// todos (ver enunciado: "el Auditor puede enviar novedades... de varios
-// depósitos que seleccione, o de todos"). Internamente crea UN documento
-// independiente por depósito destino: cada uno se lee y se responde de
-// forma completamente independiente en su propio depósito.
-func (s *Service) EnviarDifusion(ctx context.Context, usuarioID string, dto EnviarNovedadDifusionDTO) ([]NovedadDTO, error) {
+// EnviarDifusion manda la misma novedad a varios depósitos elegidos,
+// o a todos.
+func (s *Service) EnviarDifusion(
+	ctx context.Context,
+	usuarioID string,
+	dto EnviarNovedadDifusionDTO,
+) ([]NovedadDTO, error) {
+
 	depositosDestino := dto.DepositosIDs
 
 	if dto.Todos {
-		todos, err := s.depositoRepositorio.EncontrarTodos(ctx)
+		depositos, err := s.depositoRepositorio.EncontrarTodos(ctx)
 		if err != nil {
 			return nil, err
 		}
-		depositosDestino = make([]string, 0, len(todos))
-		for _, d := range todos {
-			depositosDestino = append(depositosDestino, d.ID.Hex())
+
+		depositosDestino = make([]string, 0, len(depositos))
+
+		for _, deposito := range depositos {
+			depositosDestino = append(
+				depositosDestino,
+				deposito.ID.Hex(),
+			)
+		}
+	} else {
+		if len(depositosDestino) == 0 {
+			return nil, ErrSinDestinatarios
+		}
+
+		if _, err := s.depositoRepositorio.EncontrarPorIds(
+			ctx,
+			depositosDestino,
+		); err != nil {
+			return nil, err
 		}
 	}
 
@@ -101,22 +164,42 @@ func (s *Service) EnviarDifusion(ctx context.Context, usuarioID string, dto Envi
 	}
 
 	resultado := make([]NovedadDTO, 0, len(depositosDestino))
+
 	for _, depositoID := range depositosDestino {
-		enviada, err := crearNovedad(ctx, s.repositorio, dto.Texto, depositoID, usuarioID)
+		enviada, err := crearNovedad(
+			ctx,
+			s.repositorio,
+			dto.Texto,
+			depositoID,
+			usuarioID,
+		)
+
 		if err != nil {
 			return nil, err
 		}
+
 		resultado = append(resultado, enviada)
 	}
 
 	return resultado, nil
 }
 
-// ListarDeDeposito lista, paginadas y con filtro opcional "solo no leídas",
-// las novedades de un depósito, e informa además cuántas hay sin leer en
-// total (sin importar la página pedida — ver NovedadesPaginadoDTO.NoLeidas).
-func (s *Service) ListarDeDeposito(ctx context.Context, rol, depositoUsuario, depositoID string, filtro FiltroNovedadesDTO) (NovedadesPaginadoDTO, error) {
-	if err := verificarAccesoDeposito(rol, depositoUsuario, depositoID); err != nil {
+// ListarDeDeposito lista las novedades de un depósito,
+// paginadas y con filtro opcional "solo no leídas".
+func (s *Service) ListarDeDeposito(
+	ctx context.Context,
+	rol,
+	depositoUsuario,
+	depositoID,
+	usuarioID string,
+	filtro FiltroNovedadesDTO,
+) (NovedadesPaginadoDTO, error) {
+
+	if err := verificarAccesoDeposito(
+		rol,
+		depositoUsuario,
+		depositoID,
+	); err != nil {
 		return NovedadesPaginadoDTO{}, err
 	}
 
@@ -125,77 +208,147 @@ func (s *Service) ListarDeDeposito(ctx context.Context, rol, depositoUsuario, de
 		return NovedadesPaginadoDTO{}, err
 	}
 
-	noLeidas, err := s.repositorio.ContarNoLeidas(ctx, oidDeposito)
+	lector, err := lectorParaRol(rol, usuarioID)
 	if err != nil {
 		return NovedadesPaginadoDTO{}, err
 	}
 
-	novedades, total, err := s.repositorio.ListarPorDeposito(ctx, oidDeposito, filtro.SoloNoLeidas == "true", filtro.Pagina, filtro.TamañoPagina)
+	noLeidas, err := s.repositorio.ContarNoLeidas(
+		ctx,
+		oidDeposito,
+		lector,
+	)
 	if err != nil {
 		return NovedadesPaginadoDTO{}, err
-	}
-
-	items := make([]NovedadDTO, 0, len(novedades))
-	for _, n := range novedades {
-		items = append(items, n.ConvertirADTO())
 	}
 
 	pagina := filtro.Pagina
 	if pagina < 1 {
 		pagina = 1
 	}
-	tamañoPagina := filtro.TamañoPagina
-	if tamañoPagina < 1 {
-		tamañoPagina = 20
+
+	tamanioPagina := filtro.TamanioPagina
+	if tamanioPagina < 1 {
+		tamanioPagina = 20
+	} else if tamanioPagina > MaxTamanioPagina {
+		tamanioPagina = MaxTamanioPagina
+	}
+
+	novedades, total, err := s.repositorio.ListarPorDeposito(
+		ctx,
+		oidDeposito,
+		lector,
+		filtro.SoloNoLeidas == "true",
+		pagina,
+		tamanioPagina,
+	)
+	if err != nil {
+		return NovedadesPaginadoDTO{}, err
+	}
+
+	items := make([]NovedadDTO, 0, len(novedades))
+
+	for _, n := range novedades {
+		items = append(items, n.ConvertirADTO(lector))
 	}
 
 	return NovedadesPaginadoDTO{
-		Items:        items,
-		Total:        total,
-		NoLeidas:     noLeidas,
-		Pagina:       pagina,
-		TamañoPagina: tamañoPagina,
+		Items:         items,
+		Total:         total,
+		NoLeidas:      noLeidas,
+		Pagina:        pagina,
+		TamanioPagina: tamanioPagina,
 	}, nil
 }
 
-// Obtener devuelve una novedad puntual, validando acceso al depósito al que
-// pertenece.
-func (s *Service) Obtener(ctx context.Context, rol, depositoUsuario, id string) (NovedadDTO, error) {
+// Obtener devuelve una novedad puntual,
+// validando acceso al depósito al que pertenece.
+func (s *Service) Obtener(
+	ctx context.Context,
+	rol,
+	depositoUsuario,
+	id,
+	usuarioID string,
+) (NovedadDTO, error) {
+
 	n, err := s.repositorio.EncontrarPorId(ctx, id)
 	if err != nil {
 		return NovedadDTO{}, err
 	}
-	if err := verificarAccesoDeposito(rol, depositoUsuario, n.DepositoID.Hex()); err != nil {
+
+	if err := verificarAccesoDeposito(
+		rol,
+		depositoUsuario,
+		n.DepositoID.Hex(),
+	); err != nil {
 		return NovedadDTO{}, err
 	}
-	return n.ConvertirADTO(), nil
+
+	lector, err := lectorParaRol(rol, usuarioID)
+	if err != nil {
+		return NovedadDTO{}, err
+	}
+
+	return n.ConvertirADTO(lector), nil
 }
 
-// MarcarLeida marca la novedad como leída, sin responderla.
-func (s *Service) MarcarLeida(ctx context.Context, rol, depositoUsuario, id string) (NovedadDTO, error) {
+// MarcarLeida marca la novedad como leída para el operario autenticado,
+// sin responderla.
+func (s *Service) MarcarLeida(
+	ctx context.Context,
+	rol,
+	depositoUsuario,
+	id,
+	usuarioID string,
+) (NovedadDTO, error) {
+
 	n, err := s.repositorio.EncontrarPorId(ctx, id)
 	if err != nil {
 		return NovedadDTO{}, err
 	}
-	if err := verificarAccesoDeposito(rol, depositoUsuario, n.DepositoID.Hex()); err != nil {
+
+	if err := verificarAccesoDeposito(
+		rol,
+		depositoUsuario,
+		n.DepositoID.Hex(),
+	); err != nil {
 		return NovedadDTO{}, err
 	}
 
-	actualizada, err := s.repositorio.MarcarLeida(ctx, id)
+	oidUsuario, err := bson.ObjectIDFromHex(usuarioID)
 	if err != nil {
 		return NovedadDTO{}, err
 	}
-	return actualizada.ConvertirADTO(), nil
+
+	actualizada, err := s.repositorio.MarcarLeida(ctx, id, oidUsuario)
+	if err != nil {
+		return NovedadDTO{}, err
+	}
+
+	return actualizada.ConvertirADTO(&oidUsuario), nil
 }
 
-// Responder registra la respuesta del operario y, en el mismo paso, marca la
-// novedad como leída (ver repository.Responder).
-func (s *Service) Responder(ctx context.Context, rol, depositoUsuario, id, usuarioID string, dto ResponderNovedadDTO) (NovedadDTO, error) {
+// Responder registra la respuesta del operario y,
+// en el mismo paso, marca la novedad como leída para ese operario.
+func (s *Service) Responder(
+	ctx context.Context,
+	rol,
+	depositoUsuario,
+	id,
+	usuarioID string,
+	dto ResponderNovedadDTO,
+) (NovedadDTO, error) {
+
 	n, err := s.repositorio.EncontrarPorId(ctx, id)
 	if err != nil {
 		return NovedadDTO{}, err
 	}
-	if err := verificarAccesoDeposito(rol, depositoUsuario, n.DepositoID.Hex()); err != nil {
+
+	if err := verificarAccesoDeposito(
+		rol,
+		depositoUsuario,
+		n.DepositoID.Hex(),
+	); err != nil {
 		return NovedadDTO{}, err
 	}
 
@@ -210,9 +363,14 @@ func (s *Service) Responder(ctx context.Context, rol, depositoUsuario, id, usuar
 		FechaRespuesta: time.Now(),
 	}
 
-	actualizada, err := s.repositorio.Responder(ctx, id, respuesta)
+	actualizada, err := s.repositorio.Responder(
+		ctx,
+		id,
+		respuesta,
+	)
 	if err != nil {
 		return NovedadDTO{}, err
 	}
-	return actualizada.ConvertirADTO(), nil
+
+	return actualizada.ConvertirADTO(&oidUsuario), nil
 }

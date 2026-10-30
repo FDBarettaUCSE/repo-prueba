@@ -63,13 +63,13 @@ func (s *CategoriaService) CrearCategoria(ctx context.Context, idAdmin string, c
 	return MapeoACategoriaDTO(categoria), nil
 }
 
-func (s *CategoriaService) ActualizarCategoria(ctx context.Context, id, idAdmin string, c CategoriaDTO) (CategoriaDTO, error) {
+func (s *CategoriaService) ActualizarCategoria(ctx context.Context, id, idAdmin string, c ActualizarCategoriaDTO) (CategoriaDTO, error) {
 	oidAdmin, err := bson.ObjectIDFromHex(idAdmin)
 	if err != nil {
 		return CategoriaDTO{}, err
 	}
 
-	categoria, err := MapeoACategoria(c)
+	categoria := MapeoActualizarDTOACategoria(c)
 	if err != nil {
 		return CategoriaDTO{}, err
 	}

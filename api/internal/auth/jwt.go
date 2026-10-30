@@ -8,18 +8,33 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// secretKey firma y verifica los JWT. En un proyecto real viaja por variable
-// de entorno (os.Getenv("JWT_SECRET")), nunca hardcodeada — permitimos leerla
-// de variable de entorno o usar una por defecto para desarrollo.
-func getSecretKey() []byte {
-	if secret := os.Getenv("JWT_SECRET"); secret != "" {
-		return []byte(secret)
+// claveEnvJWTSecret es el nombre de la variable de entorno que tiene que
+// traer el secreto con el que se firman los JWT. A propósito NO hay un
+// valor hardcodeado de respaldo: un secreto conocido de antemano (o
+// compartido entre todos los que clonan el repo) le permite a cualquiera
+// forjar un token de administrador válido. Ver RequerirSecretoConfigurado,
+// que main.go llama al arrancar para cortar ahí mismo si falta.
+const claveEnvJWTSecret = "JWT_SECRET"
+
+// RequerirSecretoConfigurado valida que JWT_SECRET esté seteado. Se llama
+// UNA vez, al principio de main() — antes de levantar el servidor — para
+// que una configuración faltante corte el arranque con un mensaje claro, en
+// vez de fallar recién en el primer login (o, peor, si alguien reintrodujera
+// un valor por defecto, firmar tokens con un secreto adivinable).
+func RequerirSecretoConfigurado() error {
+	if os.Getenv(claveEnvJWTSecret) == "" {
+		return errors.New("falta la variable de entorno JWT_SECRET: la API no puede firmar JWT sin un secreto propio (ver .env.example)")
 	}
-	return []byte("clave-secreta-del-servidor-gestock")
+	return nil
+}
+
+func getSecretKey() []byte {
+	return []byte(os.Getenv(claveEnvJWTSecret))
 }
 
 // duracionToken es cuánto tiempo queda vigente un token desde que se emite.
-const duracionToken = 2 * time.Hour
+// modificacion de duracion de tokens, pasaron de 2 horas a 30 minutos.
+const duracionToken = 30 * time.Minute
 
 // GenerarToken emite un JWT cuyo único claim de negocio es "sub" (subject):
 // el ID (hex de bson.ObjectID) del usuario autenticado. A propósito NO viaja

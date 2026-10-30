@@ -12,7 +12,7 @@ import (
 
 type MovimientoStockRepositorio interface {
 	Crear(ctx context.Context, m MovimientoStock) (MovimientoStock, error)
-	Listar(ctx context.Context, filtro FiltroMovimientosDTO, depositoPermitido string) ([]MovimientoStock, error)
+	Listar(ctx context.Context, filtro FiltroMovimientosDTO, depositoPermitido string) ([]MovimientoStock, int64, error)
 	EncontrarPorID(ctx context.Context, id string) (MovimientoStock, error)
 }
 
@@ -38,20 +38,20 @@ func (r *RepositorioMongo) Crear(ctx context.Context, m MovimientoStock) (Movimi
 func (r *RepositorioMongo) EncontrarPorID(ctx context.Context, id string) (MovimientoStock, error) {
 	oid, err := bson.ObjectIDFromHex(id)
 	if err != nil {
-		return MovimientoStock{}, err
+		return MovimientoStock{}, ErrIDMovimientoInvalido
 	}
 
 	var m MovimientoStock
 	if err := r.coleccion.FindOne(ctx, bson.M{"_id": oid}).Decode(&m); err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
-			return MovimientoStock{}, errors.New("movimiento no encontrado")
+			return MovimientoStock{}, ErrMovimientoInexistente
 		}
 		return MovimientoStock{}, err
 	}
 	return m, nil
 }
 
-func (r *RepositorioMongo) Listar(ctx context.Context, filtro FiltroMovimientosDTO, depositoPermitido string) ([]MovimientoStock, error) {
+func (r *RepositorioMongo) Listar(ctx context.Context, filtro FiltroMovimientosDTO, depositoPermitido string) ([]MovimientoStock, int64, error) {
 	query := bson.M{}
 
 	if depositoPermitido != "" {
@@ -91,17 +91,36 @@ func (r *RepositorioMongo) Listar(ctx context.Context, filtro FiltroMovimientosD
 		}
 	}
 
-	// Orden descendente por fecha_hora para ver los más recientes primero
+	total, err := r.coleccion.CountDocuments(ctx, query)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// Orden descendente por fecha_hora para ver los más recientes primero con paginación
 	opts := options.Find().SetSort(bson.D{{Key: "fecha_hora", Value: -1}})
+
+	if filtro.TamanioPagina >= 0 {
+		pagina := filtro.Pagina
+		if pagina < 1 {
+			pagina = 1
+		}
+		tamanioPagina := filtro.TamanioPagina
+		if tamanioPagina < 1 {
+			tamanioPagina = 20
+		}
+		opts.SetSkip(int64((pagina - 1) * tamanioPagina)).
+			SetLimit(int64(tamanioPagina))
+	}
+
 	cur, err := r.coleccion.Find(ctx, query, opts)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer cur.Close(ctx)
 
 	var movimientos []MovimientoStock
 	if err := cur.All(ctx, &movimientos); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return movimientos, nil
+	return movimientos, total, nil
 }

@@ -24,12 +24,12 @@ func responderSegunError(c *gin.Context, err error) {
 	case errors.Is(err, ErrProductoInexistente):
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 	default:
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 	}
 }
 
 // ListarStock responde GET /depositos/:depositoId/stock, con filtros
-// opcionales ?categoriaId= y ?bajoMinimo=true, y paginación ?pagina=&tamañoPagina=.
+// opcionales ?categoriaId= y ?bajoMinimo=true, y paginación ?pagina=&tamanioPagina=.
 func (h *Handler) ListarStock(c *gin.Context) {
 	usrCtx, ok := middleware.ObtenerUsuarioContexto(c)
 	if !ok {
@@ -39,14 +39,26 @@ func (h *Handler) ListarStock(c *gin.Context) {
 
 	depositoID := c.Param("depositoId")
 
-	pagina, _ := strconv.Atoi(c.Query("pagina"))
-	tamañoPagina, _ := strconv.Atoi(c.Query("tamañoPagina"))
+	pagina, err := strconv.Atoi(c.DefaultQuery("pagina", "1"))
+	if err != nil || pagina < 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "pagina debe ser un entero >= 1"})
+		return
+	}
+
+	tamanioStr := c.Query("tamanioPagina")
+	tamanioPagina, _ := strconv.Atoi(tamanioStr)
+	if tamanioPagina < 1 {
+		tamanioPagina = 20
+	}
+	if tamanioPagina > MaxTamanioPagina {
+		tamanioPagina = MaxTamanioPagina
+	}
 
 	filtro := ListarStockFiltro{
 		CategoriaID:    c.Query("categoriaId"),
 		SoloBajoMinimo: c.Query("bajoMinimo") == "true",
 		Pagina:         pagina,
-		TamañoPagina:   tamañoPagina,
+		TamanioPagina:  tamanioPagina,
 	}
 
 	resultado, err := h.service.ListarStockDeposito(
@@ -167,6 +179,8 @@ func RegistrarRutas(
 			handler.ObtenerStock,
 		)
 
+		// El override de stock mínimo por depósito lo configuran tanto el
+		// Administrador como el Gerente de ese depósito.
 		stock.PUT(
 			"/:productoId/stock-minimo",
 			authMiddleware,

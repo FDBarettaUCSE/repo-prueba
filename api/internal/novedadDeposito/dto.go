@@ -31,9 +31,9 @@ type ResponderNovedadDTO struct {
 // FiltroNovedadesDTO agrupa filtro y paginación del listado de novedades de
 // un depósito.
 type FiltroNovedadesDTO struct {
-	SoloNoLeidas string `form:"solo_no_leidas"` // "true" para filtrar solo las no leídas
-	Pagina       int    `form:"pagina"`
-	TamañoPagina int    `form:"tamaño_pagina"`
+	SoloNoLeidas  string `form:"solo_no_leidas"` // "true" para filtrar solo las no leídas
+	Pagina        int    `form:"pagina"`
+	TamanioPagina int    `form:"tamanioPagina"`
 }
 
 // RespuestaNovedadDTO es la vista de salida de una respuesta.
@@ -44,42 +44,76 @@ type RespuestaNovedadDTO struct {
 }
 
 // NovedadDTO es la vista de salida de una novedad.
+//
+//   - Leido: para un operario, si ÉL la leyó; para el resto de los roles
+//     (que no marcan lectura), si la leyó al menos un operario.
+//   - Respuesta: para un operario, su última respuesta; para el resto, la
+//     última respuesta recibida. Se mantiene por compatibilidad; el detalle
+//     completo está en Respuestas.
 type NovedadDTO struct {
-	ID         string               `json:"id"`
-	DepositoID string               `json:"deposito_id"`
-	Texto      string               `json:"texto"`
-	FechaEnvio string               `json:"fecha_envio"`
-	Leido      bool                 `json:"leido"`
-	Respuesta  *RespuestaNovedadDTO `json:"respuesta,omitempty"`
+	ID         string                `json:"id"`
+	DepositoID string                `json:"deposito_id"`
+	Texto      string                `json:"texto"`
+	FechaEnvio string                `json:"fecha_envio"`
+	Leido      bool                  `json:"leido"`
+	LeidoPor   []string              `json:"leido_por"`
+	Respuesta  *RespuestaNovedadDTO  `json:"respuesta,omitempty"`
+	Respuestas []RespuestaNovedadDTO `json:"respuestas"`
 }
 
 // NovedadesPaginadoDTO envuelve el listado con metadata de paginación y el
-// contador de no leídas del depósito. NoLeidas es independiente del filtro y
-// de la página pedidos, para que el frontend pueda mostrar el badge "3 no
-// leídas" sin tener que traer todas las novedades para contarlas.
+// contador de no leídas. NoLeidas es independiente del filtro y de la
+// página pedidos, para que el frontend pueda mostrar el badge "3 no leídas"
+// sin tener que traer todas las novedades para contarlas. Para un operario
+// cuenta las que ÉL no leyó; para el resto de los roles, las que todavía no
+// leyó ningún operario.
 type NovedadesPaginadoDTO struct {
-	Items        []NovedadDTO `json:"items"`
-	Total        int64        `json:"total"`
-	NoLeidas     int64        `json:"no_leidas"`
-	Pagina       int          `json:"pagina"`
-	TamañoPagina int          `json:"tamaño_pagina"`
+	Items         []NovedadDTO `json:"items"`
+	Total         int64        `json:"total"`
+	NoLeidas      int64        `json:"no_leidas"`
+	Pagina        int          `json:"pagina"`
+	TamanioPagina int          `json:"tamanioPagina"`
 }
 
-// ConvertirADTO transforma la entidad a su DTO de salida.
-func (n NovedadDeposito) ConvertirADTO() NovedadDTO {
+func mapearRespuestaDTO(r RespuestaNovedad) RespuestaNovedadDTO {
+	return RespuestaNovedadDTO{
+		Texto:          r.Texto,
+		UsuarioID:      r.UsuarioID.Hex(),
+		FechaRespuesta: r.FechaRespuesta.Format(time.RFC3339),
+	}
+}
+
+// ConvertirADTO transforma la entidad a su DTO de salida, calculando el
+// estado de lectura desde el punto de vista del lector. lector es el
+// operario que consulta, o nil si consulta otro rol (gerente, auditor,
+// administrador).
+func (n NovedadDeposito) ConvertirADTO(lector *bson.ObjectID) NovedadDTO {
 	dto := NovedadDTO{
 		ID:         n.ID.Hex(),
 		DepositoID: n.DepositoID.Hex(),
 		Texto:      n.Texto,
 		FechaEnvio: n.FechaEnvio.Format(time.RFC3339),
-		Leido:      n.Leido,
+		LeidoPor:   make([]string, 0, len(n.LeidoPor)),
+		Respuestas: make([]RespuestaNovedadDTO, 0, len(n.Respuestas)),
 	}
 
-	if n.Respuesta != nil {
-		dto.Respuesta = &RespuestaNovedadDTO{
-			Texto:          n.Respuesta.Texto,
-			UsuarioID:      n.Respuesta.UsuarioID.Hex(),
-			FechaRespuesta: n.Respuesta.FechaRespuesta.Format(time.RFC3339),
+	for _, id := range n.LeidoPor {
+		dto.LeidoPor = append(dto.LeidoPor, id.Hex())
+	}
+
+	if lector != nil {
+		dto.Leido = n.LeidaPor(*lector)
+	} else {
+		dto.Leido = len(n.LeidoPor) > 0
+	}
+
+	for _, r := range n.Respuestas {
+		rDTO := mapearRespuestaDTO(r)
+		dto.Respuestas = append(dto.Respuestas, rDTO)
+
+		if lector == nil || r.UsuarioID == *lector {
+			ultima := rDTO
+			dto.Respuesta = &ultima
 		}
 	}
 
@@ -97,6 +131,7 @@ func (dto EnviarNovedadDTO) ConvertirAModelo(depositoID string) (NovedadDeposito
 		DepositoID: depOID,
 		Texto:      dto.Texto,
 		FechaEnvio: time.Now(),
-		Leido:      false,
+		LeidoPor:   []bson.ObjectID{},
+		Respuestas: []RespuestaNovedad{},
 	}, nil
 }

@@ -4,6 +4,7 @@ import (
 	"api/internal/middleware"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
@@ -19,11 +20,24 @@ func NuevoHandler(service *Service) *Handler {
 func responderSegunError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, ErrAccesoDenegado):
-		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": err.Error(),
+		})
+
 	case errors.Is(err, ErrSinDestinatarios):
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": err.Error(),
+		})
+
+	case errors.Is(err, ErrNovedadNoEncontrada):
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": err.Error(),
+		})
+
 	default:
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": err.Error(),
+		})
 	}
 }
 
@@ -31,17 +45,28 @@ func responderSegunError(c *gin.Context, err error) {
 func (h *Handler) EnviarADeposito(c *gin.Context) {
 	usr, ok := middleware.ObtenerUsuarioContexto(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "no autenticado"})
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "no autenticado",
+		})
 		return
 	}
 
 	var dto EnviarNovedadDTO
 	if err := c.ShouldBindJSON(&dto); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": err.Error(),
+		})
 		return
 	}
 
-	novedad, err := h.service.EnviarADeposito(c.Request.Context(), usr.UsuarioRol, usr.DepositoID, c.Param("depositoId"), usr.UsuarioID, dto)
+	novedad, err := h.service.EnviarADeposito(
+		c.Request.Context(),
+		usr.UsuarioRol,
+		usr.DepositoID,
+		c.Param("depositoId"),
+		usr.UsuarioID,
+		dto,
+	)
 	if err != nil {
 		responderSegunError(c, err)
 		return
@@ -50,21 +75,29 @@ func (h *Handler) EnviarADeposito(c *gin.Context) {
 	c.JSON(http.StatusCreated, novedad)
 }
 
-// EnviarDifusion responde POST /novedades/difusion (Auditor/Administrador).
+// EnviarDifusion responde POST /novedades/difusion.
 func (h *Handler) EnviarDifusion(c *gin.Context) {
 	usr, ok := middleware.ObtenerUsuarioContexto(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "no autenticado"})
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "no autenticado",
+		})
 		return
 	}
 
 	var dto EnviarNovedadDifusionDTO
 	if err := c.ShouldBindJSON(&dto); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": err.Error(),
+		})
 		return
 	}
 
-	novedades, err := h.service.EnviarDifusion(c.Request.Context(), usr.UsuarioID, dto)
+	novedades, err := h.service.EnviarDifusion(
+		c.Request.Context(),
+		usr.UsuarioID,
+		dto,
+	)
 	if err != nil {
 		responderSegunError(c, err)
 		return
@@ -77,17 +110,45 @@ func (h *Handler) EnviarDifusion(c *gin.Context) {
 func (h *Handler) ListarDeDeposito(c *gin.Context) {
 	usr, ok := middleware.ObtenerUsuarioContexto(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "no autenticado"})
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "no autenticado",
+		})
 		return
 	}
 
-	var filtro FiltroNovedadesDTO
-	if err := c.ShouldBindQuery(&filtro); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	pagina, err := strconv.Atoi(
+		c.DefaultQuery("pagina", "1"),
+	)
+	if err != nil || pagina < 1 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "pagina debe ser un entero >= 1",
+		})
 		return
 	}
 
-	resultado, err := h.service.ListarDeDeposito(c.Request.Context(), usr.UsuarioRol, usr.DepositoID, c.Param("depositoId"), filtro)
+	tamanioStr := c.Query("tamanioPagina")
+	tamanioPagina, _ := strconv.Atoi(tamanioStr)
+
+	if tamanioPagina < 1 {
+		tamanioPagina = 20
+	} else if tamanioPagina > MaxTamanioPagina {
+		tamanioPagina = MaxTamanioPagina
+	}
+
+	filtro := FiltroNovedadesDTO{
+		SoloNoLeidas:  c.Query("solo_no_leidas"),
+		Pagina:        pagina,
+		TamanioPagina: tamanioPagina,
+	}
+
+	resultado, err := h.service.ListarDeDeposito(
+		c.Request.Context(),
+		usr.UsuarioRol,
+		usr.DepositoID,
+		c.Param("depositoId"),
+		usr.UsuarioID,
+		filtro,
+	)
 	if err != nil {
 		responderSegunError(c, err)
 		return
@@ -100,11 +161,19 @@ func (h *Handler) ListarDeDeposito(c *gin.Context) {
 func (h *Handler) Obtener(c *gin.Context) {
 	usr, ok := middleware.ObtenerUsuarioContexto(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "no autenticado"})
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "no autenticado",
+		})
 		return
 	}
 
-	novedad, err := h.service.Obtener(c.Request.Context(), usr.UsuarioRol, usr.DepositoID, c.Param("id"))
+	novedad, err := h.service.Obtener(
+		c.Request.Context(),
+		usr.UsuarioRol,
+		usr.DepositoID,
+		c.Param("id"),
+		usr.UsuarioID,
+	)
 	if err != nil {
 		responderSegunError(c, err)
 		return
@@ -117,11 +186,19 @@ func (h *Handler) Obtener(c *gin.Context) {
 func (h *Handler) MarcarLeida(c *gin.Context) {
 	usr, ok := middleware.ObtenerUsuarioContexto(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "no autenticado"})
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "no autenticado",
+		})
 		return
 	}
 
-	novedad, err := h.service.MarcarLeida(c.Request.Context(), usr.UsuarioRol, usr.DepositoID, c.Param("id"))
+	novedad, err := h.service.MarcarLeida(
+		c.Request.Context(),
+		usr.UsuarioRol,
+		usr.DepositoID,
+		c.Param("id"),
+		usr.UsuarioID,
+	)
 	if err != nil {
 		responderSegunError(c, err)
 		return
@@ -134,17 +211,28 @@ func (h *Handler) MarcarLeida(c *gin.Context) {
 func (h *Handler) Responder(c *gin.Context) {
 	usr, ok := middleware.ObtenerUsuarioContexto(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "no autenticado"})
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "no autenticado",
+		})
 		return
 	}
 
 	var dto ResponderNovedadDTO
 	if err := c.ShouldBindJSON(&dto); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": err.Error(),
+		})
 		return
 	}
 
-	novedad, err := h.service.Responder(c.Request.Context(), usr.UsuarioRol, usr.DepositoID, c.Param("id"), usr.UsuarioID, dto)
+	novedad, err := h.service.Responder(
+		c.Request.Context(),
+		usr.UsuarioRol,
+		usr.DepositoID,
+		c.Param("id"),
+		usr.UsuarioID,
+		dto,
+	)
 	if err != nil {
 		responderSegunError(c, err)
 		return
@@ -153,33 +241,54 @@ func (h *Handler) Responder(c *gin.Context) {
 	c.JSON(http.StatusOK, novedad)
 }
 
-// RegistrarRutas registra las rutas de novedades. La difusión a varios
-// depósitos (o a todos) va aparte, en /novedades/difusion, porque no cuelga
-// de un :depositoId puntual — es al revés, un mismo envío se abre en varios.
-func RegistrarRutas(router *gin.Engine, h *Handler, authMiddleware gin.HandlerFunc, rolMiddleware func(...string) gin.HandlerFunc) {
-	novedades := router.Group("/depositos/:depositoId/novedades", authMiddleware)
+// RegistrarRutas registra las rutas de novedades.
+func RegistrarRutas(
+	router *gin.Engine,
+	h *Handler,
+	authMiddleware gin.HandlerFunc,
+	rolMiddleware func(...string) gin.HandlerFunc,
+) {
+	novedades := router.Group(
+		"/depositos/:depositoId/novedades",
+		authMiddleware,
+	)
+
 	{
-		// Gerente (solo su depósito, validado en el service) y
-		// Auditor/Administrador (cualquier depósito) envían novedades.
-		novedades.POST("", rolMiddleware("gerente", "auditor", "administrador"), h.EnviarADeposito)
+		novedades.POST(
+			"",
+			rolMiddleware("administrador", "gerente", "auditor"),
+			h.EnviarADeposito,
+		)
 
-		// El Operario consulta las novedades de su propio depósito;
-		// Gerente/Administrador/Auditor pueden ver las de cualquiera que
-		// les corresponda (ver Service.verificarAccesoDeposito).
-		novedades.GET("", rolMiddleware("operario", "gerente", "administrador", "auditor"), h.ListarDeDeposito)
-		novedades.GET("/:id", rolMiddleware("operario", "gerente", "administrador", "auditor"), h.Obtener)
+		novedades.GET(
+			"",
+			rolMiddleware("administrador", "operario", "gerente", "auditor"),
+			h.ListarDeDeposito,
+		)
 
-		// Marcar como leída y responder son acciones del Operario
-		// destinatario (ver enunciado): Administrador se agrega
-		// defensivamente, igual que en el resto de los módulos.
-		novedades.PUT("/:id/leida", rolMiddleware("operario", "administrador"), h.MarcarLeida)
-		novedades.PUT("/:id/responder", rolMiddleware("operario", "administrador"), h.Responder)
+		novedades.GET(
+			"/:id",
+			rolMiddleware("administrador", "operario", "gerente", "auditor"),
+			h.Obtener,
+		)
+
+		novedades.PUT(
+			"/:id/leida",
+			rolMiddleware("operario"),
+			h.MarcarLeida,
+		)
+
+		novedades.PUT(
+			"/:id/responder",
+			rolMiddleware("operario"),
+			h.Responder,
+		)
 	}
 
 	router.POST(
 		"/novedades/difusion",
 		authMiddleware,
-		rolMiddleware("auditor", "administrador"),
+		rolMiddleware("administrador", "auditor"),
 		h.EnviarDifusion,
 	)
 }

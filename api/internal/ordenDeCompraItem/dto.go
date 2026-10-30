@@ -12,14 +12,14 @@ type OrdenCompraItemDTO struct {
 }
 
 type CrearOrdenCompraItemDTO struct {
-	ProductoID         string `json:"productoId"`
-	CantidadSolicitada int32  `json:"cantidadSolicitada"`
+	ProductoID         string `json:"productoId" binding:"required"`
+	CantidadSolicitada int32  `json:"cantidadSolicitada" binding:"required,gt=0"`
 }
 
 type ActualizarOrdenCompraItemDTO struct {
 	ID                 string `json:"id"`
-	ProductoID         string `json:"productoId"`
-	CantidadSolicitada int32  `json:"cantidadSolicitada"`
+	ProductoID         string `json:"productoId" binding:"required"`
+	CantidadSolicitada int32  `json:"cantidadSolicitada" binding:"required,gt=0"`
 }
 
 func MapeoCrearDTOAOrdenCompraItem(dto CrearOrdenCompraItemDTO) (OrdenCompraItem, error) {

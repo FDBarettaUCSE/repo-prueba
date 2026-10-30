@@ -2,6 +2,7 @@ package ordendecompra
 
 import (
 	"api/internal/auditoria"
+	ordendecompraitem "api/internal/ordenDeCompraItem"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -32,6 +33,7 @@ func MapeoAOrdenCompraDTO(o OrdenCompra) OrdenCompraDTO {
 		ProveedorID: o.ProveedorID.Hex(),
 		DepositoID:  o.DepositoID.Hex(),
 		Estado:      o.Estado,
+		Items:       make([]ordendecompraitem.OrdenCompraItemDTO, 0),
 	}
 }
 

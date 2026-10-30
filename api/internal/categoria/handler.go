@@ -2,7 +2,7 @@ package categoria
 
 import (
 	"api/internal/middleware"
-	"fmt"
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -19,12 +19,9 @@ func NuevoCategoriaHandler(service *CategoriaService) *CategoriaHandler {
 }
 
 func (h *CategoriaHandler) ListarTodos(c *gin.Context) {
-	// Esto parece de más
-	usuarioContexto, _ := c.Get("usuarioContexto")
-	fmt.Println(usuarioContexto)
 	categoriasDTO, err := h.categoriaService.ListarTodasCategorias(c.Request.Context())
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		responderSegunError(c, err)
 		return
 	}
 
@@ -36,9 +33,10 @@ func (h *CategoriaHandler) BuscarPorID(c *gin.Context) {
 
 	categoria, err := h.categoriaService.BuscarCategoriaPorID(c.Request.Context(), id)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		responderSegunError(c, err)
 		return
 	}
+
 	c.JSON(http.StatusOK, categoria)
 }
 
@@ -57,18 +55,23 @@ func (h *CategoriaHandler) CrearCategoria(c *gin.Context) {
 
 	adminID := usrCtx.UsuarioID
 
-	categoriaCreado, err := h.categoriaService.CrearCategoria(c.Request.Context(), adminID, dto)
+	categoriaCreado, err := h.categoriaService.CrearCategoria(
+		c.Request.Context(),
+		adminID,
+		dto,
+	)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		responderSegunError(c, err)
 		return
 	}
+
 	c.JSON(http.StatusCreated, categoriaCreado)
 }
 
 func (h *CategoriaHandler) ActualizarCategoria(c *gin.Context) {
 	id := c.Param("id")
 
-	var dto CategoriaDTO
+	var dto ActualizarCategoriaDTO
 	if err := c.ShouldBindJSON(&dto); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -82,11 +85,17 @@ func (h *CategoriaHandler) ActualizarCategoria(c *gin.Context) {
 
 	adminID := usrCtx.UsuarioID
 
-	actualizado, err := h.categoriaService.ActualizarCategoria(c.Request.Context(), id, adminID, dto)
+	actualizado, err := h.categoriaService.ActualizarCategoria(
+		c.Request.Context(),
+		id,
+		adminID,
+		dto,
+	)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		responderSegunError(c, err)
 		return
 	}
+
 	c.JSON(http.StatusOK, actualizado)
 }
 
@@ -101,11 +110,25 @@ func (h *CategoriaHandler) EliminarCategoria(c *gin.Context) {
 
 	adminID := usrCtx.UsuarioID
 
-	if err := h.categoriaService.EliminarCategoria(c.Request.Context(), id, adminID); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+	if err := h.categoriaService.EliminarCategoria(
+		c.Request.Context(),
+		id,
+		adminID,
+	); err != nil {
+		responderSegunError(c, err)
 		return
 	}
+
 	c.Status(http.StatusNoContent)
+}
+
+func responderSegunError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, ErrCategoriaNoEncontrada):
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+	default:
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	}
 }
 
 func RegistrarRutas(
@@ -113,28 +136,33 @@ func RegistrarRutas(
 	categoriaHandler *CategoriaHandler,
 	authMiddleware gin.HandlerFunc,
 	rolMiddleware func(...string) gin.HandlerFunc) {
+
 	categorias := router.Group("/categorias")
 	{
 		categorias.GET(
 			"",
 			authMiddleware,
-			rolMiddleware("administrador"),
+			rolMiddleware("administrador", "gerente", "operario", "auditor"),
 			categoriaHandler.ListarTodos)
+
 		categorias.GET(
 			"/:id",
 			authMiddleware,
-			rolMiddleware("administrador"),
+			rolMiddleware("administrador", "gerente", "operario", "auditor"),
 			categoriaHandler.BuscarPorID)
+
 		categorias.POST(
 			"",
 			authMiddleware,
 			rolMiddleware("administrador"),
 			categoriaHandler.CrearCategoria)
+
 		categorias.PUT(
 			"/:id",
 			authMiddleware,
 			rolMiddleware("administrador"),
 			categoriaHandler.ActualizarCategoria)
+
 		categorias.DELETE(
 			"/:id",
 			authMiddleware,

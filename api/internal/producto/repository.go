@@ -7,11 +7,14 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 type ProductoRepositorio interface {
 	EncontrarPorId(ctx context.Context, id string) (Producto, error)
+	EncontrarPorIds(ctx context.Context, ids []bson.ObjectID) ([]Producto, error)
 	EncontrarTodos(ctx context.Context) ([]Producto, error)
+	Listar(ctx context.Context, filtro FiltroProductosDTO) ([]Producto, int64, error)
 	CrearProducto(ctx context.Context, d Producto) (Producto, error)
 	ActualizarProducto(ctx context.Context, id string, d Producto) (Producto, error)
 	ActualizarStockMinimo(ctx context.Context, id string, stockMinimo int32, idAdmin string) error
@@ -28,7 +31,11 @@ func NuevoRepositorioMongo(coleccion *mongo.Collection) *RepositorioMongo {
 
 var _ ProductoRepositorio = (*RepositorioMongo)(nil)
 
-func (r *RepositorioMongo) EncontrarPorId(ctx context.Context, id string) (Producto, error) {
+func (r *RepositorioMongo) EncontrarPorId(
+	ctx context.Context,
+	id string,
+) (Producto, error) {
+
 	oid, err := bson.ObjectIDFromHex(id)
 	if err != nil {
 		return Producto{}, err
@@ -36,12 +43,22 @@ func (r *RepositorioMongo) EncontrarPorId(ctx context.Context, id string) (Produ
 
 	var producto Producto
 
-	if err := r.coleccion.FindOne(ctx, bson.M{"_id": oid}).Decode(&producto); err != nil {
+	err = r.coleccion.FindOne(
+		ctx,
+		bson.M{
+			"_id":               oid,
+			"fecha_eliminacion": nil,
+		},
+	).Decode(&producto)
+
+	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			return Producto{}, errors.New("producto no encontrado")
 		}
+
 		return Producto{}, err
 	}
+
 	return producto, nil
 }
 
@@ -98,7 +115,10 @@ func (r *RepositorioMongo) ActualizarProducto(ctx context.Context, id string, p 
 
 	resultado, err := r.coleccion.UpdateOne(
 		ctx,
-		bson.M{"_id": oid},
+		bson.M{
+			"_id":               oid,
+			"fecha_eliminacion": nil,
+		},
 		update,
 	)
 
@@ -176,7 +196,10 @@ func (r *RepositorioMongo) ActualizarStockMinimo(
 
 	resultado, err := r.coleccion.UpdateOne(
 		ctx,
-		bson.M{"_id": oid},
+		bson.M{
+			"_id":               oid,
+			"fecha_eliminacion": nil,
+		},
 		bson.M{
 			"$set": bson.M{
 				"stock_minimo":             stockMinimo,
@@ -196,3 +219,78 @@ func (r *RepositorioMongo) ActualizarStockMinimo(
 
 	return nil
 }
+
+func (r *RepositorioMongo) EncontrarPorIds(
+	ctx context.Context,
+	ids []bson.ObjectID,
+) ([]Producto, error) {
+
+	if len(ids) == 0 {
+		return []Producto{}, nil
+	}
+
+	filtro := bson.M{
+		"_id": bson.M{
+			"$in": ids,
+		},
+		"fecha_eliminacion": nil,
+	}
+
+	cursor, err := r.coleccion.Find(ctx, filtro)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var productos []Producto
+
+	if err := cursor.All(ctx, &productos); err != nil {
+		return nil, err
+	}
+
+	return productos, nil
+}
+
+func (r *RepositorioMongo) Listar(ctx context.Context, filtro FiltroProductosDTO) ([]Producto, int64, error) {
+	query := bson.M{"fecha_eliminacion": nil}
+
+	if filtro.CategoriaID != "" {
+		if cOID, err := bson.ObjectIDFromHex(filtro.CategoriaID); err == nil {
+			query["categoria"] = cOID
+		}
+	}
+
+	total, err := r.coleccion.CountDocuments(ctx, query)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	opts := options.Find().SetSort(bson.D{{Key: "nombre", Value: 1}})
+
+	if filtro.Todos != "true" && filtro.TamanioPagina >= 0 {
+		pagina := filtro.Pagina
+		if pagina < 1 {
+			pagina = 1
+		}
+		tamanioPagina := filtro.TamanioPagina
+		if tamanioPagina < 1 {
+			tamanioPagina = 20
+		}
+		opts.SetSkip(int64((pagina - 1) * tamanioPagina)).
+			SetLimit(int64(tamanioPagina))
+	}
+
+	cursor, err := r.coleccion.Find(ctx, query, opts)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer cursor.Close(ctx)
+
+	var productos []Producto
+	if err := cursor.All(ctx, &productos); err != nil {
+		return nil, 0, err
+	}
+
+	return productos, total, nil
+}
+

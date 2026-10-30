@@ -1,12 +1,19 @@
 package reporte
 
-// ===== Reporte de inventario (stock y valorización) =====
+// ===== Paginación =====
 
-// FiltroInventarioDTO: depósito y categoría opcionales — si no se manda
-// depósito (o el rol no puede elegir), se agrega TODA la empresa.
+type PaginacionDTO struct {
+	Pagina        int   `json:"pagina"`
+	TamanioPagina int   `json:"tamanioPagina"`
+	Total         int64 `json:"total"`
+}
+
+// ===== Reporte de inventario =====
+
 type FiltroInventarioDTO struct {
 	DepositoID  string `form:"deposito_id"`
 	CategoriaID string `form:"categoria_id"`
+	Pagina      int    `form:"pagina"`
 }
 
 type ValorizacionDepositoDTO struct {
@@ -24,46 +31,47 @@ type ValorizacionCategoriaDTO struct {
 }
 
 type ReporteInventarioDTO struct {
-	PorDeposito     []ValorizacionDepositoDTO  `json:"por_deposito"`
-	PorCategoria    []ValorizacionCategoriaDTO `json:"por_categoria"`
-	StockTotal      int32                      `json:"stock_total"`
-	ValorizadoTotal float64                    `json:"valorizado_total"`
+	PorDeposito        []ValorizacionDepositoDTO `json:"por_deposito"`
+	PaginacionDeposito PaginacionDTO             `json:"paginacion_deposito"`
+
+	PorCategoria        []ValorizacionCategoriaDTO `json:"por_categoria"`
+	PaginacionCategoria PaginacionDTO              `json:"paginacion_categoria"`
+
+	StockTotal      int32   `json:"stock_total"`
+	ValorizadoTotal float64 `json:"valorizado_total"`
 }
 
-// ===== Reporte de movimientos de stock =====
+// ===== Reporte de movimientos =====
 
-// FiltroReporteMovimientosDTO: mismos filtros que el listado crudo de
-// /movimientos (ver movimientoStock), reusados acá para agregar en vez de
-// paginar.
 type FiltroReporteMovimientosDTO struct {
 	DepositoID string `form:"deposito_id"`
 	Tipo       string `form:"tipo"`
 	FechaDesde string `form:"fecha_desde"`
 	FechaHasta string `form:"fecha_hasta"`
+	Pagina     int    `form:"pagina"`
 }
 
 type ResumenMovimientoDTO struct {
 	DepositoID      string `json:"deposito_id"`
 	DepositoNombre  string `json:"deposito_nombre"`
-	Fecha           string `json:"fecha"` // YYYY-MM-DD
+	Fecha           string `json:"fecha"`
 	Tipo            string `json:"tipo"`
-	CantidadEventos int64  `json:"cantidad_eventos"` // cuántos movimientos
-	UnidadesNetas   int32  `json:"unidades_netas"`   // suma con signo de "cantidad" (ver movimientoStock.MovimientoStock.Cantidad)
+	CantidadEventos int64  `json:"cantidad_eventos"`
+	UnidadesNetas   int32  `json:"unidades_netas"`
 }
 
 type ReporteMovimientosDTO struct {
 	Resumen          []ResumenMovimientoDTO `json:"resumen"`
 	TotalMovimientos int64                  `json:"total_movimientos"`
+	Paginacion       PaginacionDTO          `json:"paginacion"`
 }
 
-// ===== Reporte de alertas (stock mínimo y próximo vencimiento) =====
+// ===== Reporte de alertas =====
 
-// FiltroAlertasDTO: DiasVencimiento es la ventana configurable del
-// enunciado ("productos próximos a vencer, dentro de una ventana de días
-// configurable"); si no se manda, el service usa un default (30).
 type FiltroAlertasDTO struct {
 	DepositoID      string `form:"deposito_id"`
 	DiasVencimiento int    `form:"dias_vencimiento"`
+	Pagina          int    `form:"pagina"`
 }
 
 type ProductoBajoMinimoDTO struct {
@@ -86,14 +94,18 @@ type ProductoPorVencerDTO struct {
 }
 
 type ReporteAlertasDTO struct {
-	BajoMinimo []ProductoBajoMinimoDTO `json:"bajo_minimo"`
-	PorVencer  []ProductoPorVencerDTO  `json:"por_vencer"`
+	BajoMinimo       []ProductoBajoMinimoDTO `json:"bajo_minimo"`
+	PaginacionMinimo PaginacionDTO           `json:"paginacion_minimo"`
+
+	PorVencer             []ProductoPorVencerDTO `json:"por_vencer"`
+	PaginacionVencimiento PaginacionDTO          `json:"paginacion_vencimiento"`
 }
 
-// ===== Reporte de órdenes de compra y transferencias pendientes =====
+// ===== Reporte de pendientes =====
 
 type FiltroPendientesDTO struct {
 	DepositoID string `form:"deposito_id"`
+	Pagina     int    `form:"pagina"`
 }
 
 type EstadoOrdenesDepositoDTO struct {
@@ -105,14 +117,6 @@ type EstadoOrdenesDepositoDTO struct {
 	Completada     int64  `json:"completada"`
 }
 
-// EstadoTransferenciasDepositoDTO mira las transferencias desde el punto de
-// vista de "qué le falta hacer a este depósito", no un conteo crudo por
-// estado: SolicitadasComoOrigen son las que este depósito pidió y todavía
-// esperan que el destino resuelva; PendientesDeAprobar son las que ESTE
-// depósito (como destino) tiene que aprobar o rechazar; AprobadasPorRecibir
-// son las que ya aprobó como destino y todavía no se completaron (falta que
-// llegue la mercadería). Ver enunciado: el dashboard del Gerente necesita
-// justamente "las transferencias que requieren su aprobación".
 type EstadoTransferenciasDepositoDTO struct {
 	DepositoID            string `json:"deposito_id"`
 	DepositoNombre        string `json:"deposito_nombre"`
@@ -122,6 +126,9 @@ type EstadoTransferenciasDepositoDTO struct {
 }
 
 type ReportePendientesDTO struct {
-	Ordenes        []EstadoOrdenesDepositoDTO        `json:"ordenes"`
-	Transferencias []EstadoTransferenciasDepositoDTO `json:"transferencias"`
+	Ordenes           []EstadoOrdenesDepositoDTO `json:"ordenes"`
+	PaginacionOrdenes PaginacionDTO              `json:"paginacion_ordenes"`
+
+	Transferencias           []EstadoTransferenciasDepositoDTO `json:"transferencias"`
+	PaginacionTransferencias PaginacionDTO                     `json:"paginacion_transferencias"`
 }

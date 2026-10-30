@@ -2,7 +2,9 @@ package producto
 
 import (
 	"api/internal/middleware"
+	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
@@ -11,35 +13,103 @@ type ProductoHandler struct {
 	productoService *ProductoService
 }
 
-func NuevoProductoHandler(service *ProductoService) *ProductoHandler {
+func NuevoProductoHandler(
+	service *ProductoService,
+) *ProductoHandler {
 	return &ProductoHandler{
 		productoService: service,
 	}
 }
 
+func responderError(c *gin.Context, err error) {
+
+	switch {
+
+	case errors.Is(err, ErrUnidadMedidaInvalida),
+		errors.Is(err, ErrNombreProductoVacio),
+		errors.Is(err, ErrCostoUnitarioInvalido),
+		errors.Is(err, ErrStockMinimoInvalido):
+
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": err.Error(),
+		})
+
+	case errors.Is(err, ErrProductoInexistente),
+		errors.Is(err, ErrCategoriaInexistente):
+
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": err.Error(),
+		})
+
+	default:
+
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": err.Error(),
+		})
+	}
+}
+
 func (h *ProductoHandler) ListarTodos(c *gin.Context) {
 
-	productosDTO, err := h.productoService.ListarTodosProductos(
-		c.Request.Context(),
-	)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	pagina, err :=
+		strconv.Atoi(
+			c.DefaultQuery("pagina", "1"),
+		)
+
+	if err != nil || pagina < 1 {
+
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "pagina debe ser un entero >= 1",
+		})
+
 		return
 	}
 
-	c.JSON(http.StatusOK, productosDTO)
+	var filtro FiltroProductosDTO
+
+	if err := c.ShouldBindQuery(&filtro); err != nil {
+
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": err.Error(),
+		})
+
+		return
+	}
+
+	filtro.Pagina = pagina
+
+	if filtro.TamanioPagina < 1 {
+		filtro.TamanioPagina = 10
+	} else if filtro.TamanioPagina > MaxTamanioPagina {
+		filtro.TamanioPagina = MaxTamanioPagina
+	}
+
+	resultado, err :=
+		h.productoService.ListarProductos(
+			c.Request.Context(),
+			filtro,
+		)
+
+	if err != nil {
+		responderError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, resultado)
 }
 
 func (h *ProductoHandler) BuscarPorID(c *gin.Context) {
 
 	id := c.Param("id")
 
-	producto, err := h.productoService.BuscarProductoPorID(
-		c.Request.Context(),
-		id,
-	)
+	producto, err :=
+		h.productoService.BuscarProductoPorID(
+			c.Request.Context(),
+			id,
+		)
+
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		responderError(c, err)
 		return
 	}
 
@@ -51,29 +121,42 @@ func (h *ProductoHandler) CrearProducto(c *gin.Context) {
 	var dto CrearProductoDTO
 
 	if err := c.ShouldBindJSON(&dto); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": err.Error(),
+		})
+
 		return
 	}
 
-	usrCtx, ok := middleware.ObtenerUsuarioContexto(c)
+	usrCtx, ok :=
+		middleware.ObtenerUsuarioContexto(c)
+
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "usuario no autenticado"})
+
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "usuario no autenticado",
+		})
+
 		return
 	}
 
-	adminID := usrCtx.UsuarioID
+	productoCreado, err :=
+		h.productoService.CrearProducto(
+			c.Request.Context(),
+			usrCtx.UsuarioID,
+			dto,
+		)
 
-	productoCreado, err := h.productoService.CrearProducto(
-		c.Request.Context(),
-		adminID,
-		dto,
-	)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		responderError(c, err)
 		return
 	}
 
-	c.JSON(http.StatusCreated, productoCreado)
+	c.JSON(
+		http.StatusCreated,
+		productoCreado,
+	)
 }
 
 func (h *ProductoHandler) ActualizarProducto(c *gin.Context) {
@@ -83,89 +166,115 @@ func (h *ProductoHandler) ActualizarProducto(c *gin.Context) {
 	var dto ActualizarProductoDTO
 
 	if err := c.ShouldBindJSON(&dto); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": err.Error(),
+		})
+
 		return
 	}
 
-	usrCtx, ok := middleware.ObtenerUsuarioContexto(c)
+	usrCtx, ok :=
+		middleware.ObtenerUsuarioContexto(c)
+
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "usuario no autenticado"})
+
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "usuario no autenticado",
+		})
+
 		return
 	}
 
-	adminID := usrCtx.UsuarioID
+	actualizado, err :=
+		h.productoService.ActualizarProducto(
+			c.Request.Context(),
+			id,
+			usrCtx.UsuarioID,
+			dto,
+		)
 
-	actualizado, err := h.productoService.ActualizarProducto(
-		c.Request.Context(),
-		id,
-		adminID,
-		dto,
-	)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		responderError(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, actualizado)
+	c.JSON(
+		http.StatusOK,
+		actualizado,
+	)
 }
 
 func (h *ProductoHandler) EliminarProducto(c *gin.Context) {
 
 	id := c.Param("id")
 
-	usrCtx, ok := middleware.ObtenerUsuarioContexto(c)
+	usrCtx, ok :=
+		middleware.ObtenerUsuarioContexto(c)
+
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "usuario no autenticado"})
+
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "usuario no autenticado",
+		})
+
 		return
 	}
 
-	adminID := usrCtx.UsuarioID
+	err :=
+		h.productoService.EliminarProducto(
+			c.Request.Context(),
+			id,
+			usrCtx.UsuarioID,
+		)
 
-	if err := h.productoService.EliminarProducto(
-		c.Request.Context(),
-		id,
-		adminID,
-	); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+	if err != nil {
+		responderError(c, err)
 		return
 	}
 
 	c.Status(http.StatusNoContent)
 }
 
-func (h *ProductoHandler) ConfigurarStockMinimo(c *gin.Context) {
+func (h *ProductoHandler) ConfigurarStockMinimo(
+	c *gin.Context,
+) {
+
 	id := c.Param("id")
 
 	var dto StockMinimoDTO
 
 	if err := c.ShouldBindJSON(&dto); err != nil {
+
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": err.Error(),
 		})
+
 		return
 	}
 
-	usrCtx, ok := middleware.ObtenerUsuarioContexto(c)
+	usrCtx, ok :=
+		middleware.ObtenerUsuarioContexto(c)
+
 	if !ok {
+
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"error": "usuario no autenticado",
 		})
+
 		return
 	}
 
-	adminID := usrCtx.UsuarioID
-
-	err := h.productoService.ConfigurarStockMinimo(
-		c.Request.Context(),
-		id,
-		adminID,
-		dto,
-	)
+	err :=
+		h.productoService.ConfigurarStockMinimo(
+			c.Request.Context(),
+			id,
+			usrCtx.UsuarioID,
+			dto,
+		)
 
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": err.Error(),
-		})
+		responderError(c, err)
 		return
 	}
 
@@ -178,7 +287,9 @@ func RegistrarRutas(
 	authMiddleware gin.HandlerFunc,
 	rolMiddleware func(...string) gin.HandlerFunc,
 ) {
+
 	productos := router.Group("/productos")
+
 	{
 		productos.GET(
 			"",
@@ -195,14 +306,20 @@ func RegistrarRutas(
 		productos.POST(
 			"",
 			authMiddleware,
-			rolMiddleware("administrador"),
+			rolMiddleware(
+				"administrador",
+				"gerente",
+			),
 			productoHandler.CrearProducto,
 		)
 
 		productos.PUT(
 			"/:id",
 			authMiddleware,
-			rolMiddleware("administrador", "gerente"),
+			rolMiddleware(
+				"administrador",
+				"gerente",
+			),
 			productoHandler.ActualizarProducto,
 		)
 

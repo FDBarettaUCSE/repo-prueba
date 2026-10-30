@@ -8,7 +8,11 @@ type CategoriaDTO struct {
 }
 
 type CrearCategoriaDTO struct {
-	Nombre string `json:"nombre"`
+	Nombre string `json:"nombre" binding:"required"`
+}
+
+type ActualizarCategoriaDTO struct {
+	Nombre string `json:"nombre" binding:"required"`
 }
 
 func MapeoACategoria(c CategoriaDTO) (Categoria, error) {
@@ -28,4 +32,12 @@ func MapeoCrearDTOACategoria(c CrearCategoriaDTO) (Categoria, error) {
 		Nombre: c.Nombre,
 	}, nil
 
+}
+
+func MapeoActualizarDTOACategoria(
+	c ActualizarCategoriaDTO,
+) Categoria {
+	return Categoria{
+		Nombre: c.Nombre,
+	}
 }

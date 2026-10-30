@@ -1,5 +1,11 @@
 package proveedor
 
+import (
+	productoproveedor "api/internal/productoProveedor"
+
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
 type ProveedorDTO struct {
 	ID       string `json:"id"`
 	Nombre   string `json:"nombre"`
@@ -9,16 +15,16 @@ type ProveedorDTO struct {
 }
 
 type CrearProveedorDTO struct {
-	Nombre   string `json:"nombre"`
-	CUIT     string `json:"cuit"`
-	Email    string `json:"email"`
+	Nombre   string `json:"nombre" binding:"required"`
+	CUIT     string `json:"cuit" binding:"required"`
+	Email    string `json:"email" binding:"required,email"`
 	Telefono string `json:"telefono"`
 }
 
 type ActualizarProveedorDTO struct {
-	Nombre   string `json:"nombre"`
-	CUIT     string `json:"cuit"`
-	Email    string `json:"email"`
+	Nombre   string `json:"nombre" binding:"required"`
+	CUIT     string `json:"cuit" binding:"required"`
+	Email    string `json:"email" binding:"required,email"`
 	Telefono string `json:"telefono"`
 }
 
@@ -45,14 +51,14 @@ func MapeoActualizarDTOAProveedor(d ActualizarProveedorDTO) Proveedor {
 // propio costo y tiempo de entrega (ver api/internal/productoProveedor).
 
 type AgregarProductoSuministradoDTO struct {
-	ProductoID        string  `json:"productoId"`
-	Costo             float64 `json:"costo"`
-	TiempoEntregaDias int     `json:"tiempoEntregaDias"`
+	ProductoID        string  `json:"productoId" binding:"required"`
+	Costo             float64 `json:"costo" binding:"required,gt=0"`
+	TiempoEntregaDias int     `json:"tiempoEntregaDias" binding:"gte=0"`
 }
 
 type ActualizarProductoSuministradoDTO struct {
-	Costo             float64 `json:"costo"`
-	TiempoEntregaDias int     `json:"tiempoEntregaDias"`
+	Costo             float64 `json:"costo" binding:"required,gt=0"`
+	TiempoEntregaDias int     `json:"tiempoEntregaDias" binding:"gte=0"`
 }
 
 // ProductoSuministradoDTO es la vista enriquecida: además del costo/tiempo
@@ -74,4 +80,30 @@ type ProveedorDeProductoDTO struct {
 	ProveedorNombre   string  `json:"proveedorNombre"`
 	Costo             float64 `json:"costo"`
 	TiempoEntregaDias int     `json:"tiempoEntregaDias"`
+}
+
+func MapeoAgregarProductoSuministradoDTOAProductoProveedor(
+	d AgregarProductoSuministradoDTO,
+	productoID bson.ObjectID,
+	proveedorID bson.ObjectID,
+) productoproveedor.ProductoProveedor {
+	return productoproveedor.ProductoProveedor{
+		ProductoID:         productoID,
+		ProveedorID:        proveedorID,
+		CostoUnidad:        d.Costo,
+		TiempoEstimadoDias: d.TiempoEntregaDias,
+	}
+}
+
+func MapeoActualizarProductoSuministradoDTOAProductoProveedor(
+	d ActualizarProductoSuministradoDTO,
+	productoID bson.ObjectID,
+	proveedorID bson.ObjectID,
+) productoproveedor.ProductoProveedor {
+	return productoproveedor.ProductoProveedor{
+		ProductoID:         productoID,
+		ProveedorID:        proveedorID,
+		CostoUnidad:        d.Costo,
+		TiempoEstimadoDias: d.TiempoEntregaDias,
+	}
 }

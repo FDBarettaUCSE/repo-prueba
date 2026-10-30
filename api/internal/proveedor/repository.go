@@ -16,6 +16,7 @@ type ProveedorRepositorio interface {
 	CrearProveedor(ctx context.Context, p Proveedor) (Proveedor, error)
 	ActualizarProveedor(ctx context.Context, id string, p Proveedor) (Proveedor, error)
 	EliminarProveedor(ctx context.Context, id, idAdmin string) error
+	EncontrarPorIds(ctx context.Context, ids []bson.ObjectID) ([]Proveedor, error)
 }
 
 type RepositorioMongo struct {
@@ -29,29 +30,51 @@ func NuevoRepositorioMongo(coleccion *mongo.Collection) *RepositorioMongo {
 var _ ProveedorRepositorio = (*RepositorioMongo)(nil)
 
 func (r *RepositorioMongo) EncontrarPorId(ctx context.Context, id string) (Proveedor, error) {
+
 	oid, err := bson.ObjectIDFromHex(id)
 	if err != nil {
 		return Proveedor{}, err
 	}
 
 	var proveedor Proveedor
-	if err := r.coleccion.FindOne(ctx, bson.M{"_id": oid}).Decode(&proveedor); err != nil {
+
+	err = r.coleccion.FindOne(
+		ctx,
+		bson.M{
+			"_id":               oid,
+			"fecha_eliminacion": nil,
+		},
+	).Decode(&proveedor)
+
+	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			return Proveedor{}, errors.New("proveedor no encontrado")
 		}
 		return Proveedor{}, err
 	}
+
 	return proveedor, nil
 }
 
 func (r *RepositorioMongo) EncontrarPorCUIT(ctx context.Context, cuit string) (Proveedor, error) {
+
 	var proveedor Proveedor
-	if err := r.coleccion.FindOne(ctx, bson.M{"cuit": cuit}).Decode(&proveedor); err != nil {
+
+	err := r.coleccion.FindOne(
+		ctx,
+		bson.M{
+			"cuit":              cuit,
+			"fecha_eliminacion": nil,
+		},
+	).Decode(&proveedor)
+
+	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
-			return Proveedor{}, errors.New("no existe un proveedor con ese CUIT")
+			return Proveedor{}, errors.New("proveedor no encontrado")
 		}
 		return Proveedor{}, err
 	}
+
 	return proveedor, nil
 }
 
@@ -66,16 +89,26 @@ func (r *RepositorioMongo) CrearProveedor(ctx context.Context, p Proveedor) (Pro
 }
 
 func (r *RepositorioMongo) EncontrarTodos(ctx context.Context) ([]Proveedor, error) {
-	cursor, err := r.coleccion.Find(ctx, bson.M{"fecha_eliminacion": nil})
+
+	cursor, err := r.coleccion.Find(
+		ctx,
+		bson.M{
+			"fecha_eliminacion": nil,
+		},
+	)
+
 	if err != nil {
 		return nil, err
 	}
+
 	defer cursor.Close(ctx)
 
 	var proveedores []Proveedor
+
 	if err := cursor.All(ctx, &proveedores); err != nil {
 		return nil, err
 	}
+
 	return proveedores, nil
 }
 
@@ -96,7 +129,14 @@ func (r *RepositorioMongo) ActualizarProveedor(ctx context.Context, id string, p
 		},
 	}
 
-	resultado, err := r.coleccion.UpdateOne(ctx, bson.M{"_id": oid}, update)
+	resultado, err := r.coleccion.UpdateOne(
+		ctx,
+		bson.M{
+			"_id":               oid,
+			"fecha_eliminacion": nil,
+		},
+		update,
+	)
 	if err != nil {
 		return Proveedor{}, err
 	}
@@ -138,4 +178,32 @@ func (r *RepositorioMongo) EliminarProveedor(ctx context.Context, id, idAdmin st
 		return errors.New("proveedor no encontrado")
 	}
 	return nil
+}
+
+func (r *RepositorioMongo) EncontrarPorIds(ctx context.Context, ids []bson.ObjectID) ([]Proveedor, error) {
+
+	if len(ids) == 0 {
+		return []Proveedor{}, nil
+	}
+
+	filtro := bson.M{
+		"_id": bson.M{
+			"$in": ids,
+		},
+		"fecha_eliminacion": nil,
+	}
+
+	cursor, err := r.coleccion.Find(ctx, filtro)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var proveedores []Proveedor
+
+	if err := cursor.All(ctx, &proveedores); err != nil {
+		return nil, err
+	}
+
+	return proveedores, nil
 }

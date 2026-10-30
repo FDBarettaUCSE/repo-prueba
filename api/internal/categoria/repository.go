@@ -9,6 +9,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
+var ErrCategoriaNoEncontrada = errors.New("categoría no encontrada")
+
 type CategoriaRepositorio interface {
 	EncontrarPorId(ctx context.Context, id string) (Categoria, error)
 	EncontrarPorIds(ctx context.Context, id []string) ([]Categoria, error)
@@ -38,7 +40,7 @@ func (r *RepositorioMongo) EncontrarPorId(ctx context.Context, id string) (Categ
 
 	if err := r.coleccion.FindOne(ctx, bson.M{"_id": oid, "fecha_eliminacion": nil}).Decode(&categoria); err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
-			return Categoria{}, errors.New("libro no encontrado")
+			return Categoria{}, ErrCategoriaNoEncontrada
 		}
 		return Categoria{}, err
 	}
@@ -135,7 +137,10 @@ func (r *RepositorioMongo) ActualizarCategoria(ctx context.Context, id string, c
 
 	resultado, err := r.coleccion.UpdateOne(
 		ctx,
-		bson.M{"_id": oid},
+		bson.M{
+			"_id":               oid,
+			"fecha_eliminacion": nil,
+		},
 		update,
 	)
 
@@ -144,7 +149,7 @@ func (r *RepositorioMongo) ActualizarCategoria(ctx context.Context, id string, c
 	}
 
 	if resultado.MatchedCount == 0 {
-		return Categoria{}, errors.New("depósito no encontrado")
+		return Categoria{}, ErrCategoriaNoEncontrada
 	}
 
 	c.ID = oid
@@ -186,7 +191,7 @@ func (r *RepositorioMongo) EliminarCategoria(ctx context.Context, id, idAdmin st
 	}
 
 	if resultado.MatchedCount == 0 {
-		return errors.New("categoría no encontrada")
+		return ErrCategoriaNoEncontrada
 	}
 
 	return nil

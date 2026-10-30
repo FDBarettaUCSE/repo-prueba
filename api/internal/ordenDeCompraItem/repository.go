@@ -9,6 +9,11 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
+var (
+	ErrOrdenCompraItemInexistente = errors.New("el item de la orden de compra no existe")
+	ErrIDOrdenCompraItemInvalido  = errors.New("el id del item de la orden de compra no es válido")
+)
+
 type OrdenCompraItemRepositorio interface {
 	EncontrarPorId(ctx context.Context, id string) (OrdenCompraItem, error)
 	EncontrarPorOrdenCompra(ctx context.Context, ordenCompraID string) ([]OrdenCompraItem, error)
@@ -39,7 +44,7 @@ func (r *RepositorioMongo) EncontrarPorId(
 
 	oid, err := bson.ObjectIDFromHex(id)
 	if err != nil {
-		return OrdenCompraItem{}, err
+		return OrdenCompraItem{}, ErrIDOrdenCompraItemInvalido
 	}
 
 	var item OrdenCompraItem
@@ -50,9 +55,7 @@ func (r *RepositorioMongo) EncontrarPorId(
 	).Decode(&item); err != nil {
 
 		if errors.Is(err, mongo.ErrNoDocuments) {
-			return OrdenCompraItem{}, errors.New(
-				"item de orden de compra no encontrado",
-			)
+			return OrdenCompraItem{}, ErrOrdenCompraItemInexistente
 		}
 
 		return OrdenCompraItem{}, err
@@ -139,7 +142,7 @@ func (r *RepositorioMongo) ActualizarOrdenCompraItem(
 
 	oid, err := bson.ObjectIDFromHex(id)
 	if err != nil {
-		return OrdenCompraItem{}, err
+		return OrdenCompraItem{}, ErrIDOrdenCompraItemInvalido
 	}
 
 	update := bson.M{
@@ -163,9 +166,7 @@ func (r *RepositorioMongo) ActualizarOrdenCompraItem(
 	}
 
 	if resultado.MatchedCount == 0 {
-		return OrdenCompraItem{}, errors.New(
-			"item de orden de compra no encontrado",
-		)
+		return OrdenCompraItem{}, ErrOrdenCompraItemInexistente
 	}
 
 	item.ID = oid
@@ -180,7 +181,7 @@ func (r *RepositorioMongo) EliminarOrdenCompraItem(
 
 	oid, err := bson.ObjectIDFromHex(id)
 	if err != nil {
-		return err
+		return ErrIDOrdenCompraItemInvalido
 	}
 
 	resultado, err := r.coleccion.DeleteOne(
@@ -192,9 +193,7 @@ func (r *RepositorioMongo) EliminarOrdenCompraItem(
 	}
 
 	if resultado.DeletedCount == 0 {
-		return errors.New(
-			"item de orden de compra no encontrado",
-		)
+		return ErrOrdenCompraItemInexistente
 	}
 
 	return nil
@@ -204,7 +203,7 @@ func (r *RepositorioMongo) EliminarPorOrdenCompra(ctx context.Context, ordenComp
 
 	oid, err := bson.ObjectIDFromHex(ordenCompraID)
 	if err != nil {
-		return err
+		return ErrIDOrdenCompraItemInvalido
 	}
 
 	_, err = r.coleccion.DeleteMany(
@@ -228,7 +227,7 @@ func (r *RepositorioMongo) RegistrarRecepcion(
 
 	oid, err := bson.ObjectIDFromHex(id)
 	if err != nil {
-		return err
+		return ErrIDOrdenCompraItemInvalido
 	}
 
 	oidAdmin, err := bson.ObjectIDFromHex(idAdmin)
@@ -257,7 +256,7 @@ func (r *RepositorioMongo) RegistrarRecepcion(
 	}
 
 	if resultado.MatchedCount == 0 {
-		return errors.New("item de orden de compra no encontrado")
+		return ErrOrdenCompraItemInexistente
 	}
 
 	return nil

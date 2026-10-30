@@ -1,4 +1,4 @@
-# Levanta el stack completo: MongoDB + la API de la Biblioteca.
+# Levanta el stack: MongoDB + la API de Gestock.
 #
 #   docker compose up --build   # construye la imagen de la API y levanta todo
 #   docker compose down         # para y borra los contenedores (el volumen queda)
@@ -19,11 +19,22 @@ services:
     ports:
       - "8080:8080"
     environment:
-      # Dentro de la red de compose, "mongo" resuelve como hostname del
-      # servicio de arriba -- no se usa "localhost" (ver Clase 2).
       MONGO_URI: "mongodb://mongo:27017"
+      JWT_SECRET: "${JWT_SECRET:?falta JWT_SECRET: copiá .env.example a .env y completalo}"
+      INITIAL_ADMIN_EMAIL: "${INITIAL_ADMIN_EMAIL:-}"
+      INITIAL_ADMIN_PASSWORD: "${INITIAL_ADMIN_PASSWORD:-}"
     depends_on:
       - mongo
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: "${VITE_API_URL:-http://localhost:8080}"
+    ports:
+      - "${FRONTEND_PORT:-5173}:80"
+    depends_on:
+      - api
 
 volumes:
   datos-depositos:

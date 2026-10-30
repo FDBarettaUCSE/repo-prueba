@@ -2,7 +2,8 @@ package middleware
 
 import "github.com/gin-gonic/gin"
 
-// UsuarioContexto es el DTO que AuthMiddleware arma a partir del JWT y deja
+// UsuarioContexto es el DTO que AuthMiddleware arma a partir del JWT (el ID)
+// y del estado actual del usuario en la base (rol y depósito), y deja
 // disponible para el resto de la request. A propósito lleva el ID y el rol del
 // usuario (nunca el hash de la contraseña, ni nada más del claim) — es
 // justo el dato mínimo que un handler protegido necesita para saber "quién

@@ -8,6 +8,8 @@ import (
 	"context"
 	"errors"
 
+	evaluacionstock "api/internal/evaluacionStock"
+
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 )
@@ -27,6 +29,7 @@ type Service struct {
 	productoRepositorio  producto.ProductoRepositorio
 	categoriaRepositorio categoria.CategoriaRepositorio
 	usuarioRepositorio   usuario.UsuarioRepositorio
+	evaluadorStock       evaluacionstock.EvaluadorStock
 }
 
 func NuevoService(
@@ -35,6 +38,7 @@ func NuevoService(
 	repoProducto producto.ProductoRepositorio,
 	repoCategoria categoria.CategoriaRepositorio,
 	repoUsuario usuario.UsuarioRepositorio,
+	evaluadorStock evaluacionstock.EvaluadorStock,
 ) *Service {
 	return &Service{
 		repositorio:          repo,
@@ -42,6 +46,7 @@ func NuevoService(
 		productoRepositorio:  repoProducto,
 		categoriaRepositorio: repoCategoria,
 		usuarioRepositorio:   repoUsuario,
+		evaluadorStock:       evaluadorStock,
 	}
 }
 
@@ -60,51 +65,29 @@ func (s *Service) verificarAcceso(ctx context.Context, usuarioID, rol, depositoI
 		return err
 	}
 
-	if u.DepositoAsociado.Hex() != depositoID {
+	if u.DepositoAsociado.IsZero() || u.DepositoAsociado.Hex() != depositoID {
 		return ErrAccesoDenegado
 	}
+
 	return nil
 }
 
-// mapearAStockDTO arma la vista enriquecida. dp puede ser el valor cero de
-// DepositoProducto (existe == false) cuando todavía no hubo ningún
-// movimiento del producto en el depósito: en ese caso el stock es 0 y no hay
-// override, pero el producto de todas formas se muestra (con su stock
-// mínimo general).
-func mapearAStockDTO(dp DepositoProducto, existe bool, dep deposito.Deposito, p producto.Producto, categoriaNombre string) StockDepositoDTO {
-	stockMinimoEfectivo := p.StockMinimo
-	var override *int32
-
-	if existe && dp.StockMinimo != nil {
-		stockMinimoEfectivo = *dp.StockMinimo
-		override = dp.StockMinimo
-	}
-
-	var stock int32
-	if existe {
-		stock = dp.Stock
-	}
-
-	return StockDepositoDTO{
-		DepositoID:          dep.ID.Hex(),
-		DepositoNombre:      dep.Nombre,
-		ProductoID:          p.ID.Hex(),
-		ProductoNombre:      p.Nombre,
-		CategoriaID:         p.Categoria.Hex(),
-		CategoriaNombre:     categoriaNombre,
-		UnidadMedida:        string(p.UnidadMedida),
-		Stock:               stock,
-		StockMinimo:         stockMinimoEfectivo,
-		StockMinimoOverride: override,
-		CostoUnitario:       p.CostoUnitario,
-		Valorizado:          float64(stock) * p.CostoUnitario,
-		BajoMinimo:          stock < stockMinimoEfectivo,
-	}
-}
-
 // ObtenerStockProducto devuelve el stock de UN producto en UN depósito.
-func (s *Service) ObtenerStockProducto(ctx context.Context, usuarioID, rol, depositoID, productoID string) (StockDepositoDTO, error) {
+func (s *Service) ObtenerStockProducto(
+	ctx context.Context,
+	usuarioID, rol, depositoID, productoID string,
+) (StockDepositoDTO, error) {
 	if err := s.verificarAcceso(ctx, usuarioID, rol, depositoID); err != nil {
+		return StockDepositoDTO{}, err
+	}
+
+	oidDeposito, err := bson.ObjectIDFromHex(depositoID)
+	if err != nil {
+		return StockDepositoDTO{}, err
+	}
+
+	oidProducto, err := bson.ObjectIDFromHex(productoID)
+	if err != nil {
 		return StockDepositoDTO{}, err
 	}
 
@@ -123,16 +106,12 @@ func (s *Service) ObtenerStockProducto(ctx context.Context, usuarioID, rol, depo
 		return StockDepositoDTO{}, err
 	}
 
-	oidDeposito, err := bson.ObjectIDFromHex(depositoID)
-	if err != nil {
-		return StockDepositoDTO{}, err
-	}
-	oidProducto, err := bson.ObjectIDFromHex(productoID)
-	if err != nil {
-		return StockDepositoDTO{}, err
-	}
+	dp, err := s.repositorio.EncontrarPorDepositoYProducto(
+		ctx,
+		oidDeposito,
+		oidProducto,
+	)
 
-	dp, err := s.repositorio.EncontrarPorDepositoYProducto(ctx, oidDeposito, oidProducto)
 	existe := true
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
@@ -142,95 +121,109 @@ func (s *Service) ObtenerStockProducto(ctx context.Context, usuarioID, rol, depo
 		}
 	}
 
-	return mapearAStockDTO(dp, existe, dep, p, cat.Nombre), nil
+	// Determinar el stock y el mínimo efectivo.
+	var stock int32
+	var override *int32
+
+	if existe {
+		stock = dp.Stock
+		override = dp.StockMinimo
+	}
+
+	stockMinimo := p.StockMinimo
+	if override != nil {
+		stockMinimo = *override
+	}
+
+	// Preparar la fila con los mismos datos que devuelve el listado.
+	fila := StockDepositoFila{
+		DepositoID:          dep.ID,
+		DepositoNombre:      dep.Nombre,
+		ProductoID:          p.ID,
+		ProductoNombre:      p.Nombre,
+		CategoriaID:         p.Categoria,
+		CategoriaNombre:     cat.Nombre,
+		UnidadMedida:        string(p.UnidadMedida),
+		Stock:               stock,
+		StockMinimo:         stockMinimo,
+		StockMinimoOverride: override,
+		CostoUnitario:       p.CostoUnitario,
+		Valorizado:          float64(stock) * p.CostoUnitario,
+		BajoMinimo:          stock < stockMinimo,
+	}
+
+	return MapearAStockDepositoDTO(fila, rol), nil
 }
 
 // ListarStockDeposito lista el stock de TODOS los productos activos en un
 // depósito (incluyendo los que todavía tienen stock 0 / sin movimientos),
 // con filtro opcional por categoría y por "solo los que están bajo mínimo",
-// y paginación (ver Clase 8).
-func (s *Service) ListarStockDeposito(ctx context.Context, usuarioID, rol, depositoID string, filtro ListarStockFiltro) (StockDepositoPaginadoDTO, error) {
+// y paginación.
+func (s *Service) ListarStockDeposito(
+	ctx context.Context,
+	usuarioID, rol, depositoID string,
+	filtro ListarStockFiltro,
+) (StockDepositoPaginadoDTO, error) {
+	// Verificar que el usuario tenga acceso al depósito.
 	if err := s.verificarAcceso(ctx, usuarioID, rol, depositoID); err != nil {
 		return StockDepositoPaginadoDTO{}, err
 	}
 
+	// Obtener los datos del depósito.
 	dep, err := s.depositoRepositorio.EncontrarPorId(ctx, depositoID)
 	if err != nil {
 		return StockDepositoPaginadoDTO{}, err
 	}
 
+	// Convertir el ID del depósito a ObjectID.
 	oidDeposito, err := bson.ObjectIDFromHex(depositoID)
 	if err != nil {
 		return StockDepositoPaginadoDTO{}, err
 	}
 
-	productos, err := s.productoRepositorio.EncontrarTodos(ctx)
-	if err != nil {
-		return StockDepositoPaginadoDTO{}, err
-	}
-
-	filas, err := s.repositorio.EncontrarPorDeposito(ctx, oidDeposito)
-	if err != nil {
-		return StockDepositoPaginadoDTO{}, err
-	}
-
-	filasPorProducto := make(map[string]DepositoProducto, len(filas))
-	for _, f := range filas {
-		filasPorProducto[f.ProductoID.Hex()] = f
-	}
-
-	categoriasCache := make(map[string]string)
-
-	items := []StockDepositoDTO{}
-	for _, p := range productos {
-		if filtro.CategoriaID != "" && p.Categoria.Hex() != filtro.CategoriaID {
-			continue
-		}
-
-		categoriaNombre, ok := categoriasCache[p.Categoria.Hex()]
-		if !ok {
-			cat, err := s.categoriaRepositorio.EncontrarPorId(ctx, p.Categoria.Hex())
-			if err == nil {
-				categoriaNombre = cat.Nombre
-			}
-			categoriasCache[p.Categoria.Hex()] = categoriaNombre
-		}
-
-		dp, existe := filasPorProducto[p.ID.Hex()]
-		dto := mapearAStockDTO(dp, existe, dep, p, categoriaNombre)
-
-		if filtro.SoloBajoMinimo && !dto.BajoMinimo {
-			continue
-		}
-
-		items = append(items, dto)
-	}
-
-	total := int64(len(items))
-
+	// Normalizar la paginación para que coincida con la consulta.
 	pagina := filtro.Pagina
 	if pagina < 1 {
 		pagina = 1
 	}
-	tamañoPagina := filtro.TamañoPagina
-	if tamañoPagina < 1 {
-		tamañoPagina = 20
+
+	tamanioPagina := filtro.TamanioPagina
+	if tamanioPagina < 1 {
+		tamanioPagina = 20
+	}
+	if tamanioPagina > MaxTamanioPagina {
+		tamanioPagina = MaxTamanioPagina
 	}
 
-	inicio := (pagina - 1) * tamañoPagina
-	if inicio > len(items) {
-		inicio = len(items)
+	// Convertir el filtro al tipo utilizado por el repositorio.
+	filtro.Pagina = pagina
+	filtro.TamanioPagina = tamanioPagina
+	filtroRepo := MapeoAFiltroRepositorio(filtro)
+
+	// Obtener los resultados y el total desde MongoDB.
+	filas, total, err := s.repositorio.ListarStockDeposito(
+		ctx,
+		oidDeposito,
+		filtroRepo,
+	)
+	if err != nil {
+		return StockDepositoPaginadoDTO{}, err
 	}
-	fin := inicio + tamañoPagina
-	if fin > len(items) {
-		fin = len(items)
+
+	// Convertir las filas obtenidas al DTO del frontend.
+	items := make([]StockDepositoDTO, 0, len(filas))
+
+	for _, fila := range filas {
+		fila.DepositoID = dep.ID
+		fila.DepositoNombre = dep.Nombre
+		items = append(items, MapearAStockDepositoDTO(fila, rol))
 	}
 
 	return StockDepositoPaginadoDTO{
-		Items:        items[inicio:fin],
-		Total:        total,
-		Pagina:       pagina,
-		TamañoPagina: tamañoPagina,
+		Items:         items,
+		Total:         total,
+		Pagina:        pagina,
+		TamanioPagina: tamanioPagina,
 	}, nil
 }
 
@@ -247,7 +240,11 @@ func (s *Service) QuitarStockMinimo(ctx context.Context, usuarioID, rol, deposit
 	return s.configurarOQuitar(ctx, usuarioID, rol, depositoID, productoID, nil)
 }
 
-func (s *Service) configurarOQuitar(ctx context.Context, usuarioID, rol, depositoID, productoID string, stockMinimo *int32) (StockDepositoDTO, error) {
+func (s *Service) configurarOQuitar(
+	ctx context.Context,
+	usuarioID, rol, depositoID, productoID string,
+	stockMinimo *int32,
+) (StockDepositoDTO, error) {
 	if err := s.verificarAcceso(ctx, usuarioID, rol, depositoID); err != nil {
 		return StockDepositoDTO{}, err
 	}
@@ -271,19 +268,59 @@ func (s *Service) configurarOQuitar(ctx context.Context, usuarioID, rol, deposit
 	if err != nil {
 		return StockDepositoDTO{}, err
 	}
+
 	oidProducto, err := bson.ObjectIDFromHex(productoID)
 	if err != nil {
 		return StockDepositoDTO{}, err
 	}
+
 	oidUsuario, err := bson.ObjectIDFromHex(usuarioID)
 	if err != nil {
 		return StockDepositoDTO{}, err
 	}
 
-	dp, err := s.repositorio.ConfigurarStockMinimo(ctx, oidDeposito, oidProducto, stockMinimo, oidUsuario)
+	dp, err := s.repositorio.ConfigurarStockMinimo(
+		ctx,
+		oidDeposito,
+		oidProducto,
+		stockMinimo,
+		oidUsuario,
+	)
 	if err != nil {
 		return StockDepositoDTO{}, err
 	}
 
-	return mapearAStockDTO(dp, true, dep, p, cat.Nombre), nil
+	stockMinimoEfectivo := p.StockMinimo
+	if dp.StockMinimo != nil {
+		stockMinimoEfectivo = *dp.StockMinimo
+	}
+
+	if err := s.evaluadorStock.EvaluarStock(
+		ctx,
+		oidDeposito,
+		oidProducto,
+		dp.Stock,
+		stockMinimoEfectivo,
+		oidUsuario,
+	); err != nil {
+		return StockDepositoDTO{}, err
+	}
+
+	fila := StockDepositoFila{
+		DepositoID:          dep.ID,
+		DepositoNombre:      dep.Nombre,
+		ProductoID:          p.ID,
+		ProductoNombre:      p.Nombre,
+		CategoriaID:         p.Categoria,
+		CategoriaNombre:     cat.Nombre,
+		UnidadMedida:        string(p.UnidadMedida),
+		Stock:               dp.Stock,
+		StockMinimo:         stockMinimoEfectivo,
+		StockMinimoOverride: dp.StockMinimo,
+		CostoUnitario:       p.CostoUnitario,
+		Valorizado:          float64(dp.Stock) * p.CostoUnitario,
+		BajoMinimo:          dp.Stock < stockMinimoEfectivo,
+	}
+
+	return MapearAStockDepositoDTO(fila, rol), nil
 }

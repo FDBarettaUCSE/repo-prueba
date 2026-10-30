@@ -4,6 +4,7 @@ import (
 	"api/internal/middleware"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
@@ -20,215 +21,404 @@ func NuevoUsuarioHandler(service *UsuarioService) *UsuarioHandler {
 
 func (usuarioHandler *UsuarioHandler) Registrar(c *gin.Context) {
 
-	//Valida el DTO recibido
 	var dto RegistrarDTO
+
 	if err := c.ShouldBindJSON(&dto); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": err.Error(),
+		})
 		return
 	}
 
-	//Busca dentro del header del contexto si existe el id del admin
 	usrCtx, ok := middleware.ObtenerUsuarioContexto(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "usuario no autenticado"})
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "usuario no autenticado",
+		})
 		return
 	}
 
 	adminID := usrCtx.UsuarioID
 
-	// Paso 2: el service valida el email duplicado y recién ahí hashea con
-	// bcrypt (ver Service.Registrar).
-	creado, err := usuarioHandler.usuarioService.Registrar(c.Request.Context(), adminID, dto)
+	creado, err := usuarioHandler.usuarioService.Registrar(
+		c.Request.Context(),
+		dto,
+		adminID,
+	)
+
 	if err != nil {
-		if errors.Is(err, ErrEmailYaRegistrado) {
-			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
-			return
+		switch {
+		case errors.Is(err, ErrEmailYaRegistrado):
+			c.JSON(http.StatusConflict, gin.H{
+				"error": err.Error(),
+			})
+
+		case errors.Is(err, ErrRolInexistente),
+			errors.Is(err, ErrRolRequiereDeposito),
+			errors.Is(err, ErrRolNoPermiteDeposito),
+			errors.Is(err, ErrDepositoInexistente):
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": err.Error(),
+			})
+
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": err.Error(),
+			})
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+
 		return
 	}
 
-	// Paso 3: responder con UsuarioDTO — nunca con el hash de la contraseña.
-	c.JSON(http.StatusCreated, creado.ConvertirAUsuarioDTO(creado))
+	c.JSON(
+		http.StatusCreated,
+		creado.ConvertirAUsuarioDTO(creado),
+	)
 }
 
-// Login responde POST /usuarios/login.
 func (usuarioHandler *UsuarioHandler) Ingresar(c *gin.Context) {
+
 	var dto IngresarDTO
+
 	if err := c.ShouldBindJSON(&dto); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": err.Error(),
+		})
 		return
 	}
 
-	token, err := usuarioHandler.usuarioService.Ingresar(c.Request.Context(), dto)
+	token, err := usuarioHandler.usuarioService.Ingresar(
+		c.Request.Context(),
+		dto,
+	)
+
 	if err != nil {
-		// Tanto "email no existe" como "contraseña incorrecta" llegan acá
-		// como ErrCredencialesInvalidas — el mismo 401 y el mismo mensaje
-		// para los dos casos (ver Service.Login).
-		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": err.Error(),
+		})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"token": token})
+	c.JSON(http.StatusOK, gin.H{
+		"token": token,
+	})
 }
 
-// Perfil responde GET /usuarios/me. Esta ruta va DETRÁS de
-// middleware.AuthMiddleware() (ver RegisterRoutes) — el ID del usuario sale
-// del JWT, nunca de un parámetro de ruta, así cada cuenta solo puede pedir
-// SU PROPIO perfil (ver el mismo criterio en CambiarPassword).
 func (usuarioHandler *UsuarioHandler) Perfil(c *gin.Context) {
+
 	usuarioCtx, ok := middleware.ObtenerUsuarioContexto(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "no autenticado"})
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "no autenticado",
+		})
 		return
 	}
 
-	usuario, err := usuarioHandler.usuarioService.ObtenerPerfil(c.Request.Context(), usuarioCtx.UsuarioID)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, usuario.ConvertirAUsuarioDTO(usuario))
-}
-
-func (usuarioHandler *UsuarioHandler) CambiarContraseña(c *gin.Context) {
-	usuarioCtx, ok := middleware.ObtenerUsuarioContexto(c)
-	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "no autenticado"})
-		return
-	}
-
-	// Paso 2: parsear y validar el body (passwordActual + passwordNueva).
-	idUsuario := c.Param("id")
-	var dto CambiarContraseñaDTO
-	if err := c.ShouldBindJSON(&dto); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	// Paso 3: el service verifica passwordActual contra el hash guardado y,
-	// si coincide, guarda el hash de passwordNueva. El ID viene del JWT
-	// (usuarioCtx), nunca del body — así nadie puede pedir cambiar la
-	// contraseña de otra cuenta.
-	err := usuarioHandler.usuarioService.CambiarContraseña(c.Request.Context(), idUsuario, usuarioCtx.UsuarioID, dto)
-	if err != nil {
-		switch {
-		case errors.Is(err, ErrPasswordActualInvalida):
-			c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
-		default:
-			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-		}
-		return
-	}
-
-	c.Status(http.StatusNoContent)
-}
-
-func (usuarioHandler *UsuarioHandler) CambiarRolUsuario(ctx *gin.Context) {
-	usuarioCtx, ok := middleware.ObtenerUsuarioContexto(ctx)
-	if !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "no autenticado"})
-		return
-	}
-
-	idUsuario := ctx.Param("id")
-	var dto CambiarRolDTO
-	if err := ctx.ShouldBindJSON(&dto); err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	err := usuarioHandler.usuarioService.CambiarRolUsuario(
-		ctx.Request.Context(),
-		idUsuario,
+	usuario, err := usuarioHandler.usuarioService.ObtenerPerfil(
+		c.Request.Context(),
 		usuarioCtx.UsuarioID,
-		dto)
+	)
 
 	if err != nil {
 		switch {
-		case errors.Is(err, ErrRolInexistente):
-			ctx.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 		case errors.Is(err, ErrUsuarioInexistente):
-			ctx.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": err.Error(),
+			})
+
 		default:
-			ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": err.Error(),
+			})
 		}
+
 		return
 	}
 
-	ctx.Status(http.StatusNoContent)
+	c.JSON(
+		http.StatusOK,
+		usuario.ConvertirAUsuarioDTO(usuario),
+	)
 }
 
-func (usuarioHandler *UsuarioHandler) CambiarEstadoUsuario(ctx *gin.Context) {
-	usuarioCtx, ok := middleware.ObtenerUsuarioContexto(ctx)
+func (usuarioHandler *UsuarioHandler) CambiarContrasenia(c *gin.Context) {
+
+	usuarioCtx, ok := middleware.ObtenerUsuarioContexto(c)
 	if !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "no autenticado"})
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "no autenticado",
+		})
 		return
 	}
 
-	idUsuario := ctx.Param("id")
-	var dto CambiarEstadoUsuarioDTO
-	if err := ctx.ShouldBindJSON(&dto); err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	idUsuario := c.Param("id")
+
+	var dto CambiarContraseniaDTO
+
+	if err := c.ShouldBindJSON(&dto); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": err.Error(),
+		})
 		return
 	}
 
-	err := usuarioHandler.usuarioService.CambiarEstadoUsuario(
-		ctx.Request.Context(),
+	err := usuarioHandler.usuarioService.CambiarContrasenia(
+		c.Request.Context(),
 		idUsuario,
 		usuarioCtx.UsuarioID,
 		dto,
 	)
 
 	if err != nil {
-		ctx.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		switch {
+		case errors.Is(err, ErrPasswordActualInvalida):
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": err.Error(),
+			})
+
+		case errors.Is(err, ErrUsuarioInexistente):
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": err.Error(),
+			})
+
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": err.Error(),
+			})
+		}
+
 		return
 	}
 
-	ctx.Status(http.StatusNoContent)
+	c.Status(http.StatusNoContent)
 }
 
-// RegisterRoutes agrupa las rutas del dominio bajo /usuarios (ver Clase 5 —
-// "router.Group() — organizar rutas por dominio"). authMiddleware se recibe
-// por parámetro en vez de importarlo acá adentro: quién cablea las rutas
-// (main.go) decide qué middleware aplicar, el paquete "usuario" no depende
-// de una instancia global de "middleware".
+func (usuarioHandler *UsuarioHandler) CambiarRolUsuario(c *gin.Context) {
+
+	usuarioCtx, ok := middleware.ObtenerUsuarioContexto(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "no autenticado",
+		})
+		return
+	}
+
+	idUsuario := c.Param("id")
+
+	var dto CambiarRolDTO
+
+	if err := c.ShouldBindJSON(&dto); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	err := usuarioHandler.usuarioService.CambiarRolUsuario(
+		c.Request.Context(),
+		idUsuario,
+		usuarioCtx.UsuarioID,
+		dto,
+	)
+
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrRolInexistente),
+			errors.Is(err, ErrRolRequiereDeposito),
+			errors.Is(err, ErrRolNoPermiteDeposito),
+			errors.Is(err, ErrDepositoInexistente):
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": err.Error(),
+			})
+
+		case errors.Is(err, ErrUsuarioInexistente):
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": err.Error(),
+			})
+
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": err.Error(),
+			})
+		}
+
+		return
+	}
+
+	c.Status(http.StatusNoContent)
+}
+
+func (usuarioHandler *UsuarioHandler) DesactivarUsuario(c *gin.Context) {
+
+	usuarioCtx, ok := middleware.ObtenerUsuarioContexto(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "no autenticado",
+		})
+		return
+	}
+
+	idUsuario := c.Param("id")
+
+	err := usuarioHandler.usuarioService.DesactivarUsuario(
+		c.Request.Context(),
+		idUsuario,
+		usuarioCtx.UsuarioID,
+	)
+
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrUsuarioInexistente):
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": err.Error(),
+			})
+
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": err.Error(),
+			})
+		}
+
+		return
+	}
+
+	c.Status(http.StatusNoContent)
+}
+
+func (usuarioHandler *UsuarioHandler) ActivarUsuario(c *gin.Context) {
+
+	usuarioCtx, ok := middleware.ObtenerUsuarioContexto(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "no autenticado",
+		})
+		return
+	}
+
+	idUsuario := c.Param("id")
+
+	err := usuarioHandler.usuarioService.ActivarUsuario(
+		c.Request.Context(),
+		idUsuario,
+		usuarioCtx.UsuarioID,
+	)
+
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrUsuarioInexistente):
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": err.Error(),
+			})
+
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": err.Error(),
+			})
+		}
+
+		return
+	}
+
+	c.Status(http.StatusNoContent)
+}
+
+func (usuarioHandler *UsuarioHandler) Listar(c *gin.Context) {
+
+	pagina, err := strconv.Atoi(c.DefaultQuery("pagina", "1"))
+	if err != nil || pagina < 1 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "pagina debe ser un entero >= 1",
+		})
+		return
+	}
+
+	tamanioPagina := 20
+	if tamanioStr := c.Query("tamanioPagina"); tamanioStr != "" {
+		if t, err := strconv.Atoi(tamanioStr); err == nil && t > 0 {
+			tamanioPagina = t
+		}
+	}
+	if tamanioPagina > MaxTamanioPagina {
+		tamanioPagina = MaxTamanioPagina
+	}
+
+	resultado, err := usuarioHandler.usuarioService.ListarPaginado(
+		c.Request.Context(),
+		pagina,
+		tamanioPagina,
+	)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, resultado)
+}
+
 func RegistrarRutas(
 	router *gin.Engine,
 	usuarioHandler *UsuarioHandler,
 	authMiddleware gin.HandlerFunc,
-	rolMiddleware func(...string) gin.HandlerFunc) {
+	rolMiddleware func(...string) gin.HandlerFunc,
+) {
+
 	usuarios := router.Group("/usuarios")
+
 	{
 		usuarios.POST(
 			"/registrar",
 			authMiddleware,
 			rolMiddleware("administrador"),
-			usuarioHandler.Registrar)
+			usuarioHandler.Registrar,
+		)
+
 		usuarios.POST(
 			"/ingresar",
-			usuarioHandler.Ingresar)
-		// A partir de acá, ambas rutas necesitan saber quién está autenticado —
-		// registro y login son, por definición, accesibles sin token todavía.
+			usuarioHandler.Ingresar,
+		)
+
+		usuarios.GET(
+			"",
+			authMiddleware,
+			rolMiddleware("administrador"),
+			usuarioHandler.Listar,
+		)
+
 		usuarios.GET(
 			"/perfil",
 			authMiddleware,
-			usuarioHandler.Perfil)
+			usuarioHandler.Perfil,
+		)
+
 		usuarios.PUT(
-			"/:id/cambiarcontraseña",
+			"/:id/cambiarcontrasenia",
 			authMiddleware,
 			rolMiddleware("administrador"),
-			usuarioHandler.CambiarContraseña)
+			usuarioHandler.CambiarContrasenia,
+		)
+
 		usuarios.PUT(
-			"/:id/cambiarestado",
+			"/:id/desactivar",
 			authMiddleware,
 			rolMiddleware("administrador"),
-			usuarioHandler.CambiarEstadoUsuario)
+			usuarioHandler.DesactivarUsuario,
+		)
+
+		usuarios.PUT(
+			"/:id/activar",
+			authMiddleware,
+			rolMiddleware("administrador"),
+			usuarioHandler.ActivarUsuario,
+		)
+
 		usuarios.PUT(
 			"/:id/cambiarrol",
 			authMiddleware,
 			rolMiddleware("administrador"),
-			usuarioHandler.CambiarRolUsuario)
+			usuarioHandler.CambiarRolUsuario,
+		)
 	}
 }

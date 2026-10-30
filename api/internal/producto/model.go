@@ -24,8 +24,8 @@ type Producto struct {
 	UnidadMedida     UnidadMedida        `bson:"unidad_medida"`
 	CostoUnitario    float64             `bson:"costo_unitario"`
 	StockMinimo      int32               `bson:"stock_minimo"`
-	FechaVencimiento *time.Time          `bson:"fecha_vencimiento, omitempty"`
-	FechaEliminacion *time.Time          `bson:"fecha_eliminacion, omitempty"`
+	FechaVencimiento *time.Time          `bson:"fecha_vencimiento,omitempty"`
+	FechaEliminacion *time.Time          `bson:"fecha_eliminacion,omitempty"`
 	Auditoria        auditoria.Auditoria `bson:"auditoria"`
 }
 

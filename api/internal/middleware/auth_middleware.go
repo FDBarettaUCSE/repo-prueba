@@ -5,6 +5,8 @@
 package middleware
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -13,13 +15,21 @@ import (
 	"api/internal/auth"
 )
 
+// ErrUsuarioNoHabilitado es el error que devuelve ValidadorUsuario
+// cuando el usuario del token ya no existe o fue desactivado.
+// Cualquier otro error se toma como una falla interna (500).
+var ErrUsuarioNoHabilitado = errors.New("el usuario no existe o fue desactivado")
+
+// ValidadorUsuario define el contrato para consultar el estado actual del
+// usuario en la base de datos en cada request autenticada.
+type ValidadorUsuario interface {
+	ObtenerUsuarioContexto(ctx context.Context, usuarioID string) (UsuarioContexto, error)
+}
+
 // AuthMiddleware valida el JWT del header "Authorization: Bearer <token>" y,
-// si es válido, deja disponible en el contexto de la request un
-// UsuarioContexto con el ID del usuario autenticado (ver ObtenerUsuarioContexto
-// en dto.go). Cualquier handler registrado DESPUÉS de este middleware puede
-// asumir que, si se ejecutó, hay un usuario autenticado — no necesita volver
-// a chequear el token.
-func AuthMiddleware() gin.HandlerFunc {
+// si es válido, consulta a ValidadorUsuario para confirmar que el usuario
+// siga activo en la base y cargar su rol y depósito actuales en la request.
+func AuthMiddleware(validador ValidadorUsuario) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Paso 1: el header tiene que estar presente. Sin él no hay forma de
 		// saber quién es el cliente.
@@ -58,23 +68,25 @@ func AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		// Paso 5: Se usa además de la id del usuario logueado, su rol.
-		usuarioRol, ok := claims["rol"].(string)
-		if !ok || usuarioRol == "" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "token inválido o expirado"})
+		// Paso 5: un token con firma válida no alcanza. Se busca al usuario
+		// en la base para rechazarlo si fue desactivado (o eliminado)
+		// mientras el token seguía vigente, y para tomar su rol y depósito
+		// ACTUALES: si un admin le cambió el rol o el depósito, el token
+		// viejo no conserva los permisos anteriores.
+		usuarioActual, err := validador.ObtenerUsuarioContexto(c.Request.Context(), usuarioID)
+		if err != nil {
+			if errors.Is(err, ErrUsuarioNoHabilitado) {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+				return
+			}
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 
-		depositoID, _ := claims["deposito_id"].(string)
+		// Paso 6: trasladar el DTO al contexto de esta request.
+		setUsuarioContexto(c, usuarioActual)
 
-		// Paso 6: armar el DTO y trasladarlo al contexto de esta request.
-		setUsuarioContexto(c, UsuarioContexto{
-			UsuarioID:  usuarioID,
-			UsuarioRol: usuarioRol,
-			DepositoID: depositoID,
-		})
-
-		// Paso 6: recién acá se le cede el control al siguiente eslabón
+		// Paso 7: recién acá se le cede el control al siguiente eslabón
 		// (otro middleware, o el handler final). Si alguno de los checks de
 		// arriba hubiera fallado, c.Abort...() ya cortó la cadena y este
 		// c.Next() nunca se alcanza.

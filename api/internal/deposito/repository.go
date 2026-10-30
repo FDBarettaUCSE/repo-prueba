@@ -11,6 +11,7 @@ import (
 
 type DepositoRepositorio interface {
 	EncontrarPorId(ctx context.Context, id string) (Deposito, error)
+	EncontrarPorIds(ctx context.Context, ids []string) ([]Deposito, error)
 	EncontrarTodos(ctx context.Context) ([]Deposito, error)
 	CrearDeposito(ctx context.Context, d Deposito) (Deposito, error)
 	ActualizarDeposito(ctx context.Context, id string, d Deposito) (Deposito, error)
@@ -37,11 +38,51 @@ func (r *RepositorioMongo) EncontrarPorId(ctx context.Context, id string) (Depos
 
 	if err := r.coleccion.FindOne(ctx, bson.M{"_id": oid, "fecha_eliminacion": nil}).Decode(&deposito); err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
-			return Deposito{}, errors.New("libro no encontrado")
+			return Deposito{}, ErrDepositoNoEncontrado
 		}
 		return Deposito{}, err
 	}
 	return deposito, nil
+}
+
+func (r *RepositorioMongo) EncontrarPorIds(ctx context.Context, ids []string) ([]Deposito, error) {
+
+	objectIDs := make([]bson.ObjectID, 0, len(ids))
+
+	for _, id := range ids {
+		oid, err := bson.ObjectIDFromHex(id)
+		if err != nil {
+			return nil, err
+		}
+
+		objectIDs = append(objectIDs, oid)
+	}
+
+	cursor, err := r.coleccion.Find(
+		ctx,
+		bson.M{
+			"_id":               bson.M{"$in": objectIDs},
+			"fecha_eliminacion": nil,
+		},
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	defer cursor.Close(ctx)
+
+	var depositos []Deposito
+
+	if err := cursor.All(ctx, &depositos); err != nil {
+		return nil, err
+	}
+
+	if len(depositos) != len(objectIDs) {
+		return nil, errors.New("uno o más depósitos no fueron encontrados")
+	}
+
+	return depositos, nil
 }
 
 func (r *RepositorioMongo) CrearDeposito(ctx context.Context, d Deposito) (Deposito, error) {
@@ -75,7 +116,11 @@ func (r *RepositorioMongo) EncontrarTodos(ctx context.Context) ([]Deposito, erro
 	return depositos, nil
 }
 
-func (r *RepositorioMongo) ActualizarDeposito(ctx context.Context, id string, d Deposito) (Deposito, error) {
+func (r *RepositorioMongo) ActualizarDeposito(
+	ctx context.Context,
+	id string,
+	d Deposito,
+) (Deposito, error) {
 
 	oid, err := bson.ObjectIDFromHex(id)
 	if err != nil {
@@ -87,6 +132,7 @@ func (r *RepositorioMongo) ActualizarDeposito(ctx context.Context, id string, d 
 			"nombre":                   d.Nombre,
 			"localidad":                d.Localidad,
 			"provincia":                d.Provincia,
+			"responsable_id":           d.ResponsableID,
 			"auditoria.modificado_por": d.Auditoria.ModificadoPor,
 			"auditoria.actualizado_en": d.Auditoria.ActualizadoEn,
 		},
@@ -94,7 +140,10 @@ func (r *RepositorioMongo) ActualizarDeposito(ctx context.Context, id string, d 
 
 	resultado, err := r.coleccion.UpdateOne(
 		ctx,
-		bson.M{"_id": oid},
+		bson.M{
+			"_id":               oid,
+			"fecha_eliminacion": nil,
+		},
 		update,
 	)
 
@@ -103,7 +152,7 @@ func (r *RepositorioMongo) ActualizarDeposito(ctx context.Context, id string, d 
 	}
 
 	if resultado.MatchedCount == 0 {
-		return Deposito{}, errors.New("depósito no encontrado")
+		return Deposito{}, ErrDepositoNoEncontrado
 	}
 
 	d.ID = oid
@@ -145,8 +194,12 @@ func (r *RepositorioMongo) EliminarDeposito(ctx context.Context, id, idAdmin str
 	}
 
 	if resultado.MatchedCount == 0 {
-		return errors.New("depósito no encontrado")
+		return ErrDepositoNoEncontrado
 	}
 
 	return nil
+}
+
+type ResponsableRepositorio interface {
+	EncontrarRolPorId(ctx context.Context, id string) (string, error)
 }
